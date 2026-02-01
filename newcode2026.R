@@ -66,29 +66,52 @@ fema <- read.csv("FemaWebDeclarationAreas.csv")  %>%
          month = as.integer(substr(.$designatedDate, start=6, stop=7)))
 
 # cred (em-dat): state-level damage
-cred <- read_excel("emdat_2000-2020.xlsx") %>% 
-  filter(`Adm Level` != 2) %>% # 371 obs 2000-2022
-  mutate(adm1 = sub("\\(Adm1).*", "", .$`Geo Locations`)) %>%
-  drop_na(`Start Day`)
-
-cred <- separate_rows(cred, adm1, sep=",") 
-cred$adm1 <- str_trim(cred$adm1, "left")
-cred$adm1 <- str_trim(cred$adm1, "right")
-cred$state <- state.abb[match(cred$adm1,state.name)]
-
-cred$date <- as.Date(paste(cred$`Start Year`, cred$`Start Month`, cred$`Start Day`, sep="-"))
-
-cred <- cred %>% select("Year", "Seq", "Disaster Type", "Total Deaths", "Total Affected", "state", "date",
-                        "Start Year", "Start Month", "Start Day")
-
+cred <- read_excel("emdat_2000-2020.xlsx") %>%
+  filter(`Adm Level` != 2) %>%
+  mutate(adm1 = str_remove(`Geo Locations`, "\\(Adm1\\).*")) %>%
+  drop_na(`Start Day`) %>%
+  separate_rows(adm1, sep = ",") %>%
+  mutate(
+    adm1  = str_trim(adm1),
+    state = state.abb[match(adm1, state.name)],
+    date  = as.Date(sprintf("%d-%02d-%02d",
+                            `Start Year`, `Start Month`, `Start Day`))
+  )
 
 # disaster criteria
-cred <- cred %>% mutate(death10 = ifelse(.$`Total Deaths` >= 41, 1, 0),
-                        affect10 = ifelse(.$`Total Affected` >= 102000, 1, 0)) %>%
-  mutate(death10 = ifelse(is.na(.$death10 == T), 0, .$death10),
-         affect10 = ifelse(is.na(.$affect10 == T), 0, .$affect10)) %>%
-  mutate(both = ifelse(.$death10 == 1 & affect10 ==1, 1, 0))
+death_q  <- quantile(cred$`Total Deaths`,
+                     probs = c(.80, .90, .95), na.rm = TRUE)
+affect_q <- quantile(cred$`Total Affected`,
+                     probs = c(.80, .90, .95), na.rm = TRUE)
 
+cred <- cred %>%
+  mutate(
+    death20  = as.integer(`Total Deaths`   >= death_q[1]),
+    death10  = as.integer(`Total Deaths`   >= death_q[2]),
+    death5   = as.integer(`Total Deaths`   >= death_q[3]),
+    affect20 = as.integer(`Total Affected` >= affect_q[1]),
+    affect10 = as.integer(`Total Affected` >= affect_q[2]),
+    affect5  = as.integer(`Total Affected` >= affect_q[3]),
+    both20   = as.integer(death20 == 1 & affect20 == 1),
+    both10   = as.integer(death10 == 1 & affect10 == 1),
+    both5    = as.integer(death5  == 1 & affect5  == 1)
+  ) %>%
+  replace_na(
+    list(
+      death5 = 0, death10 = 0, death20 = 0,
+      affect5 = 0, affect10 = 0, affect20 = 0,
+      both5 = 0, both10 = 0, both20 = 0
+    )
+  ) %>%
+  select(
+    Year, Seq, `Disaster Type`,
+    `Total Deaths`, `Total Affected`,
+    state, date,
+    `Start Year`, `Start Month`, `Start Day`,
+    death5, death10, death20,
+    affect5, affect10, affect20,
+    both5, both10, both20
+  )
 
 # join fema and cred
 disaster <- left_join(fema, cred, 
@@ -197,11 +220,8 @@ trial <- left_join(cong %>% mutate(county = as.numeric(.$county)),
   mutate(close = .$pri - .$date) %>% mutate(total_deaths = `Total Deaths`, total_affected = `Total Affected`)
 
 # only extract districts
-try <- unique(trial[c("year.x", "cong","close", "death10", "affect10", "both", "total_deaths", "total_affected")]) 
+try <- unique(trial[c("year.x", "cong","close", "death5", "death10", "death20", "affect5", "affect10", "affect20", "both5", "both10", "both20", "total_deaths", "total_affected")]) 
 
-parties <- c(100, 200)
-district_year_party <- cong %>% distinct(cong, year) %>%
-  crossing(party = parties) %>% mutate(cong = if_else(cong == "AK00", "AK01", cong)) %>% filter(year <= 2014)
 #############==join disaster (df: try) and dime (df: join)==============================================================
 
 join <- read.csv("join.csv")
@@ -215,12 +235,28 @@ agg <- join %>% dplyr::group_by(district, cycle, party) %>% drop_na(same) %>%
   mutate(pct.out = n.out/(n.in+n.out)*100,
          pct.amt.out = amt.out/(amt.in+amt.out)*100)
 
-try <- try %>% group_by(year.x, cong) %>% summarize(n_disasters = n(), close = min(close),
-                                                    death10 = max(death10),
-                                                    affect10 = max(affect10),
-                                                    both=max(both),
-                                                    deaths = sum(total_deaths),
-                                                    affected = sum(total_affected))
+try <- try %>%
+  group_by(year.x, cong) %>%
+  summarize(
+    n_disasters  = n(),
+    close        = min(close),
+    death5       = max(death5),
+    death10      = max(death10),
+    death20      = max(death20),
+    affect5      = max(affect5),
+    affect10     = max(affect10),
+    affect20     = max(affect20),
+    both5        = max(both5),
+    both10       = max(both10),
+    both20       = max(both20),
+    deaths       = sum(total_deaths, na.rm = TRUE),
+    affected     = sum(total_affected, na.rm = TRUE),
+    .groups      = "drop"
+  )
+
+parties <- c(100, 200)
+district_year_party <- cong %>% distinct(cong, year) %>%
+  crossing(party = parties) %>% mutate(cong = if_else(cong == "AK00", "AK01", cong)) %>% filter(year <= 2014)
 
 district_year_party <- left_join(district_year_party, agg, by = c(
   "year" = "cycle", "cong" = "district", "party" = "party")) %>%
@@ -230,61 +266,132 @@ agg <- left_join(district_year_party, try,
                  by = c("cycle" = "year.x",
                         "district" = "cong"))
 
-agg$nd_death <- ifelse(is.na(agg$death10)==T, 0, agg$death10)
-agg$nd_affect <- ifelse(is.na(agg$affect10)==T, 0, agg$affect10)
-agg$nd_both <- ifelse(is.na(agg$both)==T, 0, agg$both)
+agg <- agg %>%
+  mutate(
+    nd_death5   = ifelse(is.na(death5), 0, death5),
+    nd_death10  = ifelse(is.na(death10), 0, death10),
+    nd_death20  = ifelse(is.na(death20), 0, death20),
+    
+    nd_affect5  = ifelse(is.na(affect5), 0, affect5),
+    nd_affect10 = ifelse(is.na(affect10), 0, affect10),
+    nd_affect20 = ifelse(is.na(affect20), 0, affect20),
+    
+    nd_both5    = ifelse(is.na(both5), 0, both5),
+    nd_both10   = ifelse(is.na(both10), 0, both10),
+    nd_both20   = ifelse(is.na(both20), 0, both20)
+  )
 
-agg <- agg %>% mutate(across(everything(), ~replace_na(., 0)))
-agg$any <- agg$n_disasters>0
-agg$any_deaths <- !is.na(agg$deaths)
-agg$any_affected <- !is.na(agg$affected)
+agg <- agg %>%
+  mutate(
+    across(-close, ~ replace_na(., 0))
+  )
 
-agg <- agg %>% ungroup(.) %>% mutate(pct.out = round(agg$pct.out, 2))
+agg <- agg %>%
+  mutate(
+    any           = n_disasters > 0,
+    any_deaths    = !is.na(deaths),
+    any_affected  = !is.na(affected),
+    pct.out       = round(pct.out, 2)
+  )
+
 
 ## effect of nd on share (limit nd to close ones)
 
-agg$close <- as.numeric(agg$close)
-agg <- agg %>% ungroup(.) %>% mutate(nd_death2 = ifelse(.$close < 300 & .$nd_death == 1, 1, 0),
-                                     nd_affect2 = ifelse(.$close < 300 & .$nd_affect == 1, 1, 0),
-                                     nd_both2 = ifelse(.$close < 300 & .$nd_both == 1, 1, 0))
+agg <- agg %>% mutate(close = as.numeric(close))
+
+# Recode all nd_* variables to only count if close < 300
+agg <- agg %>%
+  mutate(
+    nd_death5   = ifelse(close < 300 & nd_death5   == 1, 1, 0),
+    nd_death10  = ifelse(close < 300 & nd_death10  == 1, 1, 0),
+    nd_death20  = ifelse(close < 300 & nd_death20  == 1, 1, 0),
+    
+    nd_affect5  = ifelse(close < 300 & nd_affect5  == 1, 1, 0),
+    nd_affect10 = ifelse(close < 300 & nd_affect10 == 1, 1, 0),
+    nd_affect20 = ifelse(close < 300 & nd_affect20 == 1, 1, 0),
+    
+    nd_both5    = ifelse(close < 300 & nd_both5    == 1, 1, 0),
+    nd_both10   = ifelse(close < 300 & nd_both10   == 1, 1, 0),
+    nd_both20   = ifelse(close < 300 & nd_both20   == 1, 1, 0)
+  )
 
 
 ### effect of nd on ideology
 
 # extract winner of district, cycle
-winner <- join %>% filter(p_elec_stat == "W") %>% 
-  group_by(bonica_rid, district, cycle) %>% slice(1) %>% 
-  select(cycle, bonica_rid, party, recipient_state, district, recipient_cfscore, gen_elec_stat, dwnom1, dwnom2, dwdime) %>%
-  arrange(district, cycle) %>% ungroup(.)
+winner <- join %>% 
+  filter(p_elec_stat == "W") %>% 
+  group_by(bonica_rid, district, cycle) %>% 
+  slice(1) %>% 
+  select(cycle, bonica_rid, party, recipient_state, district, 
+         recipient_cfscore, gen_elec_stat, dwnom1, dwnom2, dwdime) %>%
+  arrange(district, cycle) %>% 
+  ungroup()
 
+# join disaster info (all thresholds: 5%, 10%, 20%)
 winner <- left_join(winner, try,
-                    by= c("district" = "cong",
-                          "cycle"= "year.x")) %>% 
-  mutate(nd_death = ifelse(is.na(.$death10 == T), 0, .$death10),
-         nd_affect = ifelse(is.na(.$affect10 == T), 0, .$affect10),
-         nd_both = ifelse(is.na(.$both == T), 0, .$both))
+                    by = c("district" = "cong",
+                           "cycle"   = "year.x")) %>%
+  mutate(
+    nd_death5   = ifelse(is.na(death5), 0, death5),
+    nd_death10  = ifelse(is.na(death10), 0, death10),
+    nd_death20  = ifelse(is.na(death20), 0, death20),
+    
+    nd_affect5  = ifelse(is.na(affect5), 0, affect5),
+    nd_affect10 = ifelse(is.na(affect10), 0, affect10),
+    nd_affect20 = ifelse(is.na(affect20), 0, affect20),
+    
+    nd_both5    = ifelse(is.na(both5), 0, both5),
+    nd_both10   = ifelse(is.na(both10), 0, both10),
+    nd_both20   = ifelse(is.na(both20), 0, both20)
+  )
 
 # construct DV (ideology)
-winner <- winner %>% mutate(# cfscore
-  ab.cfscore = abs(winner$recipient_cfscore), # absolute cfscore
-  dist = case_when(.$party == 100 ~ .$recipient_cfscore - median(.$recipient_cfscore[.$party==100]), # distance from median
-                   .$party == 200 ~ .$recipient_cfscore - median(.$recipient_cfscore[.$party==200])),
+winner <- winner %>% mutate(
+  # cfscore
+  ab.cfscore = abs(recipient_cfscore),
+  dist = case_when(
+    party == 100 ~ recipient_cfscore - median(recipient_cfscore[party == 100], na.rm = TRUE),
+    party == 200 ~ recipient_cfscore - median(recipient_cfscore[party == 200], na.rm = TRUE)
+  ),
+  
   # dwdime
-  ab.dwdime = abs(.$dwdime),
-  dist.dwdime = case_when(.$party == 100 ~ .$dwdime - median(.$dwdime[.$party==100], na.rm=T), 
-                          .$party == 200 ~ .$dwdime - median(.$dwdime[.$party==200], na.rm=T)),
+  ab.dwdime = abs(dwdime),
+  dist.dwdime = case_when(
+    party == 100 ~ dwdime - median(dwdime[party == 100], na.rm = TRUE),
+    party == 200 ~ dwdime - median(dwdime[party == 200], na.rm = TRUE)
+  ),
+  
   # dwnominate
-  ab.dw1 = abs(.$dwnom1),
-  dist.dw1 = case_when(.$party == 100 ~ .$dwnom1 - median(.$dwnom1[.$party==100], na.rm=T), 
-                       .$party == 200 ~ .$dwnom1 - median(.$dwnom1[.$party==200], na.rm=T))) %>%
-  mutate(ab.dist = abs(.$dist),
-         ab.dist.dwdime = abs(.$dist.dwdime),
-         ab.dist.dw1 = abs(.$dist.dw1))
+  ab.dw1 = abs(dwnom1),
+  dist.dw1 = case_when(
+    party == 100 ~ dwnom1 - median(dwnom1[party == 100], na.rm = TRUE),
+    party == 200 ~ dwnom1 - median(dwnom1[party == 200], na.rm = TRUE)
+  )
+) %>%
+  mutate(
+    ab.dist = abs(dist),
+    ab.dist.dwdime = abs(dist.dwdime),
+    ab.dist.dw1 = abs(dist.dw1)
+  )
 
-winner <- winner %>% ungroup(.) %>% mutate(close = as.numeric(close),
-                                           nd_death2 = ifelse(.$close < 300 & .$nd_death == 1, 1, 0),
-                                           nd_affect2 = ifelse(.$close < 300 & .$nd_affect == 1, 1, 0),
-                                           nd_both2 = ifelse(.$close < 300 & .$nd_both == 1, 1, 0))
+# recode ND indicators for close disasters (<300 days)
+winner <- winner %>%
+  mutate(close = as.numeric(close)) %>%
+  mutate(
+    nd_death5   = ifelse(close < 300 & nd_death5   == 1, 1, 0),
+    nd_death10  = ifelse(close < 300 & nd_death10  == 1, 1, 0),
+    nd_death20  = ifelse(close < 300 & nd_death20  == 1, 1, 0),
+    
+    nd_affect5  = ifelse(close < 300 & nd_affect5  == 1, 1, 0),
+    nd_affect10 = ifelse(close < 300 & nd_affect10 == 1, 1, 0),
+    nd_affect20 = ifelse(close < 300 & nd_affect20 == 1, 1, 0),
+    
+    nd_both5    = ifelse(close < 300 & nd_both5    == 1, 1, 0),
+    nd_both10   = ifelse(close < 300 & nd_both10   == 1, 1, 0),
+    nd_both20   = ifelse(close < 300 & nd_both20   == 1, 1, 0)
+  )
+
 
 #### probabilty of winning
 
@@ -367,25 +474,50 @@ join_w <- left_join(district_year_party, try,
                     by = c("cycle" = "year.x",
                            "district" = "cong"))
 
-join_w$nd_death <- ifelse(is.na(join_w$death10)==T, 0, join_w$death10)
-join_w$nd_affect <- ifelse(is.na(join_w$affect10)==T, 0, join_w$affect10)
-join_w$nd_both <- ifelse(is.na(join_w$both)==T, 0, join_w$both)
+# recode ND indicators for all thresholds
+join_w <- join_w %>% mutate(
+  nd_death5   = ifelse(is.na(death5), 0, death5),
+  nd_death10  = ifelse(is.na(death10), 0, death10),
+  nd_death20  = ifelse(is.na(death20), 0, death20),
+  
+  nd_affect5  = ifelse(is.na(affect5), 0, affect5),
+  nd_affect10 = ifelse(is.na(affect10), 0, affect10),
+  nd_affect20 = ifelse(is.na(affect20), 0, affect20),
+  
+  nd_both5    = ifelse(is.na(both5), 0, both5),
+  nd_both10   = ifelse(is.na(both10), 0, both10),
+  nd_both20   = ifelse(is.na(both20), 0, both20)
+)
 
+# replace NAs in all columns with 0
 join_w <- join_w %>% mutate(across(everything(), ~replace_na(., 0)))
-join_w$any <- join_w$n_disasters>0
-join_w$any_deaths <- !is.na(join_w$deaths)
-join_w$any_affected <- !is.na(join_w)
 
-join_w <- join_w %>% ungroup(.) %>% mutate(pct.out = round(join_w$pct.out, 2))
+# additional flags
+join_w$any          <- join_w$n_disasters > 0
+join_w$any_deaths   <- !is.na(join_w$deaths)
+join_w$any_affected <- !is.na(join_w$affected)
 
+# round percentage column
+join_w <- join_w %>% ungroup() %>% mutate(pct.out = round(pct.out, 2))
 
+# recode ND indicators to include only close disasters (<300 days)
 join_w$close <- as.numeric(join_w$close)
-join_w <- join_w %>% ungroup(.) %>% mutate(nd_death2 = ifelse(.$close < 300 & .$nd_death == 1, 1, 0),
-                                           nd_affect2 = ifelse(.$close < 300 & .$nd_affect == 1, 1, 0),
-                                           nd_both2 = ifelse(.$close < 300 & .$nd_both == 1, 1, 0))
 
+join_w <- join_w %>% ungroup() %>% mutate(
+  nd_death5   = ifelse(close < 300 & nd_death5   == 1, 1, 0),
+  nd_death10  = ifelse(close < 300 & nd_death10  == 1, 1, 0),
+  nd_death20  = ifelse(close < 300 & nd_death20  == 1, 1, 0),
+  
+  nd_affect5  = ifelse(close < 300 & nd_affect5  == 1, 1, 0),
+  nd_affect10 = ifelse(close < 300 & nd_affect10 == 1, 1, 0),
+  nd_affect20 = ifelse(close < 300 & nd_affect20 == 1, 1, 0),
+  
+  nd_both5    = ifelse(close < 300 & nd_both5    == 1, 1, 0),
+  nd_both10   = ifelse(close < 300 & nd_both10   == 1, 1, 0),
+  nd_both20   = ifelse(close < 300 & nd_both20   == 1, 1, 0)
+)
 
-feols(w_cf ~ nd_both2 | district^party + cycle^party, data=join_w) 
+feols(w_cf ~ nd_both10 | district^party + cycle^party, data=join_w) 
 feols(w_cf_in ~ nd_both2 | district^party + cycle^party, data=join_w) 
 feols(w_cf_out ~ nd_both2 | district^party + cycle^party, data=join_w) 
 
@@ -398,8 +530,31 @@ feols(w_cf_out ~ nd_both2 | district + cycle, data=join_w%>% filter(party==100))
 ###------------------------------
 
 # share out district: all positive but only significant to big/disruptive disasters
-m_both_amt   <- feols(pct.amt.out ~ nd_both2   | district^party + cycle^party, data = agg)
-m_both_cnt   <- feols(pct.out     ~ nd_both2   | district^party + cycle^party, data = agg)
+feols(pct.amt.out ~ nd_death5 | district^party + cycle^party, data = agg)
+feols(pct.amt.out ~ nd_death10 | district^party + cycle^party, data = agg)
+feols(pct.amt.out ~ nd_death20 | district^party + cycle^party, data = agg)
+
+feols(pct.amt.out ~ nd_affect5 | district^party + cycle^party, data = agg)
+feols(pct.amt.out ~ nd_affect5 | district^party + cycle^party, data = agg)
+feols(pct.amt.out ~ nd_affect5 | district^party + cycle^party, data = agg)
+
+feols(pct.amt.out ~ nd_both10 | district^party + cycle^party, data = agg)
+feols(pct.amt.out ~ nd_both20 | district^party + cycle^party, data = agg)
+
+feols(pct.out ~ nd_death5 | district^party + cycle^party, data = agg)
+feols(pct.out ~ nd_death10 | district^party + cycle^party, data = agg)
+feols(pct.out ~ nd_death20 | district^party + cycle^party, data = agg)
+
+feols(pct.out ~ nd_affect5 | district^party + cycle^party, data = agg)
+feols(pct.out ~ nd_affect5 | district^party + cycle^party, data = agg)
+feols(pct.out ~ nd_affect5 | district^party + cycle^party, data = agg)
+
+feols(pct.out ~ nd_both10 | district^party + cycle^party, data = agg)
+feols(pct.out ~ nd_both20 | district^party + cycle^party, data = agg)
+
+
+m_both_amt   <- feols(pct.amt.out ~ nd_both10   | district^party + cycle^party, data = agg)
+m_both_cnt   <- feols(pct.out     ~ nd_both10   | district^party + cycle^party, data = agg)
 
 m_death_amt  <- feols(pct.amt.out ~ nd_death2  | district^party + cycle^party, data = agg)
 m_death_cnt  <- feols(pct.out     ~ nd_death2  | district^party + cycle^party, data = agg)
@@ -595,7 +750,6 @@ feols(prob_dd ~ nd_death2 | district + cycle, data=prob_anl_dan %>% filter(party
 feols(prob_dd ~ nd_death2 | district + cycle, data=prob_anl_dan %>% filter(party == 200)) 
 feols(prob_dd ~ nd_affect2 | district + cycle, data=prob_anl_dan %>% filter(party == 100)) 
 feols(prob_dd ~ nd_affect2 | district + cycle, data=prob_anl_dan %>% filter(party == 200)) 
-
 
 
 
