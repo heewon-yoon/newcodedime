@@ -14,6 +14,12 @@ library(haven)
 library(broom)
 library(dotwhisker)
 
+library(fixest)
+library(modelsummary)
+library(ggplot2)
+library(dplyr)
+library(stringr)
+
 portaldb <- dbConnect(SQLite(), "/Users/hyoon/Library/CloudStorage/GoogleDrive-heewy2003@gmail.com/My Drive/My MacBook Air/Yoon2/11. 2023Fall/apsa_interdistrict/dime.sqlite3")
 
 ## recipient data
@@ -80,27 +86,27 @@ cred <- read_excel("emdat_2000-2020.xlsx") %>%
 
 # disaster criteria
 death_q  <- quantile(cred$`Total Deaths`,
-                     probs = c(.80, .90, .95), na.rm = TRUE)
+                     probs = c(.70, .80, .90), na.rm = TRUE)
 affect_q <- quantile(cred$`Total Affected`,
-                     probs = c(.80, .90, .95), na.rm = TRUE)
+                     probs = c(.70, .80, .90), na.rm = TRUE)
 
 cred <- cred %>%
   mutate(
-    death20  = as.integer(`Total Deaths`   >= death_q[1]),
-    death10  = as.integer(`Total Deaths`   >= death_q[2]),
-    death5   = as.integer(`Total Deaths`   >= death_q[3]),
-    affect20 = as.integer(`Total Affected` >= affect_q[1]),
-    affect10 = as.integer(`Total Affected` >= affect_q[2]),
-    affect5  = as.integer(`Total Affected` >= affect_q[3]),
+    death30  = as.integer(`Total Deaths`   >= death_q[1]),
+    death20  = as.integer(`Total Deaths`   >= death_q[2]),
+    death10   = as.integer(`Total Deaths`   >= death_q[3]),
+    affect30 = as.integer(`Total Affected` >= affect_q[1]),
+    affect20 = as.integer(`Total Affected` >= affect_q[2]),
+    affect10  = as.integer(`Total Affected` >= affect_q[3]),
+    both30   = as.integer(death30 == 1 & affect30 == 1),
     both20   = as.integer(death20 == 1 & affect20 == 1),
-    both10   = as.integer(death10 == 1 & affect10 == 1),
-    both5    = as.integer(death5  == 1 & affect5  == 1)
+    both10    = as.integer(death10  == 1 & affect10  == 1)
   ) %>%
   replace_na(
     list(
-      death5 = 0, death10 = 0, death20 = 0,
-      affect5 = 0, affect10 = 0, affect20 = 0,
-      both5 = 0, both10 = 0, both20 = 0
+      death10 = 0, death20 = 0, death30 = 0,
+      affect10 = 0, affect20 = 0, affect30 = 0,
+      both10 = 0, both20 = 0, both30 = 0
     )
   ) %>%
   select(
@@ -108,9 +114,9 @@ cred <- cred %>%
     `Total Deaths`, `Total Affected`,
     state, date,
     `Start Year`, `Start Month`, `Start Day`,
-    death5, death10, death20,
-    affect5, affect10, affect20,
-    both5, both10, both20
+    death10, death20, death30,
+    affect10, affect20, affect30,
+    both10, both20, both30
   )
 
 # join fema and cred
@@ -220,7 +226,7 @@ trial <- left_join(cong %>% mutate(county = as.numeric(.$county)),
   mutate(close = .$pri - .$date) %>% mutate(total_deaths = `Total Deaths`, total_affected = `Total Affected`)
 
 # only extract districts
-try <- unique(trial[c("year.x", "cong","close", "death5", "death10", "death20", "affect5", "affect10", "affect20", "both5", "both10", "both20", "total_deaths", "total_affected")]) 
+try <- unique(trial[c("year.x", "cong","close", "death10", "death20", "death30", "affect10", "affect20", "affect30", "both10", "both20", "both30", "total_deaths", "total_affected")]) 
 
 #############==join disaster (df: try) and dime (df: join)==============================================================
 
@@ -240,15 +246,15 @@ try <- try %>%
   summarize(
     n_disasters  = n(),
     close        = min(close),
-    death5       = max(death5),
-    death10      = max(death10),
+    death10       = max(death10),
     death20      = max(death20),
-    affect5      = max(affect5),
-    affect10     = max(affect10),
+    death30      = max(death30),
+    affect10      = max(affect10),
     affect20     = max(affect20),
-    both5        = max(both5),
-    both10       = max(both10),
+    affect30     = max(affect30),
+    both10        = max(both10),
     both20       = max(both20),
+    both30       = max(both30),
     deaths       = sum(total_deaths, na.rm = TRUE),
     affected     = sum(total_affected, na.rm = TRUE),
     .groups      = "drop"
@@ -268,17 +274,17 @@ agg <- left_join(district_year_party, try,
 
 agg <- agg %>%
   mutate(
-    nd_death5   = ifelse(is.na(death5), 0, death5),
-    nd_death10  = ifelse(is.na(death10), 0, death10),
+    nd_death10   = ifelse(is.na(death10), 0, death10),
     nd_death20  = ifelse(is.na(death20), 0, death20),
+    nd_death30  = ifelse(is.na(death30), 0, death30),
     
-    nd_affect5  = ifelse(is.na(affect5), 0, affect5),
-    nd_affect10 = ifelse(is.na(affect10), 0, affect10),
+    nd_affect10  = ifelse(is.na(affect10), 0, affect10),
     nd_affect20 = ifelse(is.na(affect20), 0, affect20),
+    nd_affect30 = ifelse(is.na(affect30), 0, affect30),
     
-    nd_both5    = ifelse(is.na(both5), 0, both5),
-    nd_both10   = ifelse(is.na(both10), 0, both10),
-    nd_both20   = ifelse(is.na(both20), 0, both20)
+    nd_both10    = ifelse(is.na(both10), 0, both10),
+    nd_both20   = ifelse(is.na(both20), 0, both20),
+    nd_both30   = ifelse(is.na(both30), 0, both30)
   )
 
 agg <- agg %>%
@@ -302,17 +308,17 @@ agg <- agg %>% mutate(close = as.numeric(close))
 # Recode all nd_* variables to only count if close < 300
 agg <- agg %>%
   mutate(
-    nd_death5   = ifelse(close < 300 & nd_death5   == 1, 1, 0),
-    nd_death10  = ifelse(close < 300 & nd_death10  == 1, 1, 0),
+    nd_death10   = ifelse(close < 300 & nd_death10   == 1, 1, 0),
     nd_death20  = ifelse(close < 300 & nd_death20  == 1, 1, 0),
+    nd_death30  = ifelse(close < 300 & nd_death30  == 1, 1, 0),
     
-    nd_affect5  = ifelse(close < 300 & nd_affect5  == 1, 1, 0),
-    nd_affect10 = ifelse(close < 300 & nd_affect10 == 1, 1, 0),
+    nd_affect10  = ifelse(close < 300 & nd_affect10  == 1, 1, 0),
     nd_affect20 = ifelse(close < 300 & nd_affect20 == 1, 1, 0),
+    nd_affect30 = ifelse(close < 300 & nd_affect30 == 1, 1, 0),
     
-    nd_both5    = ifelse(close < 300 & nd_both5    == 1, 1, 0),
-    nd_both10   = ifelse(close < 300 & nd_both10   == 1, 1, 0),
-    nd_both20   = ifelse(close < 300 & nd_both20   == 1, 1, 0)
+    nd_both10    = ifelse(close < 300 & nd_both10    == 1, 1, 0),
+    nd_both20   = ifelse(close < 300 & nd_both20   == 1, 1, 0),
+    nd_both30   = ifelse(close < 300 & nd_both30   == 1, 1, 0)
   )
 
 
@@ -333,17 +339,17 @@ winner <- left_join(winner, try,
                     by = c("district" = "cong",
                            "cycle"   = "year.x")) %>%
   mutate(
-    nd_death5   = ifelse(is.na(death5), 0, death5),
-    nd_death10  = ifelse(is.na(death10), 0, death10),
+    nd_death10   = ifelse(is.na(death10), 0, death10),
     nd_death20  = ifelse(is.na(death20), 0, death20),
+    nd_death30  = ifelse(is.na(death30), 0, death30),
     
-    nd_affect5  = ifelse(is.na(affect5), 0, affect5),
-    nd_affect10 = ifelse(is.na(affect10), 0, affect10),
+    nd_affect10  = ifelse(is.na(affect10), 0, affect10),
     nd_affect20 = ifelse(is.na(affect20), 0, affect20),
+    nd_affect30 = ifelse(is.na(affect30), 0, affect30),
     
-    nd_both5    = ifelse(is.na(both5), 0, both5),
-    nd_both10   = ifelse(is.na(both10), 0, both10),
-    nd_both20   = ifelse(is.na(both20), 0, both20)
+    nd_both10    = ifelse(is.na(both10), 0, both10),
+    nd_both20   = ifelse(is.na(both20), 0, both20),
+    nd_both30   = ifelse(is.na(both30), 0, both30)
   )
 
 # construct DV (ideology)
@@ -379,17 +385,17 @@ winner <- winner %>% mutate(
 winner <- winner %>%
   mutate(close = as.numeric(close)) %>%
   mutate(
-    nd_death5   = ifelse(close < 300 & nd_death5   == 1, 1, 0),
-    nd_death10  = ifelse(close < 300 & nd_death10  == 1, 1, 0),
+    nd_death10   = ifelse(close < 300 & nd_death10   == 1, 1, 0),
     nd_death20  = ifelse(close < 300 & nd_death20  == 1, 1, 0),
+    nd_death30  = ifelse(close < 300 & nd_death30  == 1, 1, 0),
     
-    nd_affect5  = ifelse(close < 300 & nd_affect5  == 1, 1, 0),
-    nd_affect10 = ifelse(close < 300 & nd_affect10 == 1, 1, 0),
+    nd_affect10  = ifelse(close < 300 & nd_affect10  == 1, 1, 0),
     nd_affect20 = ifelse(close < 300 & nd_affect20 == 1, 1, 0),
+    nd_affect30 = ifelse(close < 300 & nd_affect30 == 1, 1, 0),
     
-    nd_both5    = ifelse(close < 300 & nd_both5    == 1, 1, 0),
-    nd_both10   = ifelse(close < 300 & nd_both10   == 1, 1, 0),
-    nd_both20   = ifelse(close < 300 & nd_both20   == 1, 1, 0)
+    nd_both10    = ifelse(close < 300 & nd_both10    == 1, 1, 0),
+    nd_both20   = ifelse(close < 300 & nd_both20   == 1, 1, 0),
+    nd_both30   = ifelse(close < 300 & nd_both30   == 1, 1, 0)
   )
 
 
@@ -431,7 +437,12 @@ prob <- prob2 %>%
     prob_cf  = sum(candpct * recipient_cfscore, na.rm = TRUE) / sum(!is.na(candpct * recipient_cfscore)),
     prob_dw1 = sum(candpct * dwnom1, na.rm = TRUE) / sum(!is.na(candpct * dwnom1)),
     prob_dw2 = sum(candpct * dwnom2, na.rm = TRUE) / sum(!is.na(candpct * dwnom2)),
-    prob_dd  = sum(candpct * dwdime, na.rm = TRUE) / sum(!is.na(candpct * dwdime))
+    prob_dd  = sum(candpct * dwdime, na.rm = TRUE) / sum(!is.na(candpct * dwdime)),
+    # Weighted average of absolute ideology (Extremity)
+    prob_abs_cf  = sum(candpct * abs(recipient_cfscore), na.rm = TRUE) / sum(!is.na(candpct * abs(recipient_cfscore))),
+    prob_abs_dw1 = sum(candpct * abs(dwnom1), na.rm = TRUE) / sum(!is.na(candpct * abs(dwnom1))),
+    prob_abs_dw2 = sum(candpct * abs(dwnom2), na.rm = TRUE) / sum(!is.na(candpct * abs(dwnom2))),
+    prob_abs_dd  = sum(candpct * abs(dwdime), na.rm = TRUE) / sum(!is.na(candpct * abs(dwdime)))
   ) %>% 
   arrange(year, cong, party) %>% 
   ungroup()
@@ -444,7 +455,10 @@ prob_anl_dan <- left_join(agg, prob,
                                 "party"="party")) 
 
 
-# donor ideology analysis
+
+
+## donor ideology analysis
+# also add weight by the size of donation
 
 join_w <- join %>%
   group_by(district, party, cycle) %>%
@@ -475,18 +489,19 @@ join_w <- left_join(district_year_party, try,
                            "district" = "cong"))
 
 # recode ND indicators for all thresholds
-join_w <- join_w %>% mutate(
-  nd_death5   = ifelse(is.na(death5), 0, death5),
-  nd_death10  = ifelse(is.na(death10), 0, death10),
+join_w <- join_w %>%
+  mutate(
+  nd_death10   = ifelse(is.na(death10), 0, death10),
   nd_death20  = ifelse(is.na(death20), 0, death20),
+  nd_death30  = ifelse(is.na(death30), 0, death30),
   
-  nd_affect5  = ifelse(is.na(affect5), 0, affect5),
-  nd_affect10 = ifelse(is.na(affect10), 0, affect10),
+  nd_affect10  = ifelse(is.na(affect10), 0, affect10),
   nd_affect20 = ifelse(is.na(affect20), 0, affect20),
+  nd_affect30 = ifelse(is.na(affect30), 0, affect30),
   
-  nd_both5    = ifelse(is.na(both5), 0, both5),
-  nd_both10   = ifelse(is.na(both10), 0, both10),
-  nd_both20   = ifelse(is.na(both20), 0, both20)
+  nd_both10    = ifelse(is.na(both10), 0, both10),
+  nd_both20   = ifelse(is.na(both20), 0, both20),
+  nd_both30   = ifelse(is.na(both30), 0, both30)
 )
 
 # replace NAs in all columns with 0
@@ -503,19 +518,20 @@ join_w <- join_w %>% ungroup() %>% mutate(pct.out = round(pct.out, 2))
 # recode ND indicators to include only close disasters (<300 days)
 join_w$close <- as.numeric(join_w$close)
 
-join_w <- join_w %>% ungroup() %>% mutate(
-  nd_death5   = ifelse(close < 300 & nd_death5   == 1, 1, 0),
-  nd_death10  = ifelse(close < 300 & nd_death10  == 1, 1, 0),
-  nd_death20  = ifelse(close < 300 & nd_death20  == 1, 1, 0),
-  
-  nd_affect5  = ifelse(close < 300 & nd_affect5  == 1, 1, 0),
-  nd_affect10 = ifelse(close < 300 & nd_affect10 == 1, 1, 0),
-  nd_affect20 = ifelse(close < 300 & nd_affect20 == 1, 1, 0),
-  
-  nd_both5    = ifelse(close < 300 & nd_both5    == 1, 1, 0),
-  nd_both10   = ifelse(close < 300 & nd_both10   == 1, 1, 0),
-  nd_both20   = ifelse(close < 300 & nd_both20   == 1, 1, 0)
-)
+join_w <- join_w %>% ungroup() %>% 
+  mutate(
+    nd_death10   = ifelse(close < 300 & nd_death10   == 1, 1, 0),
+    nd_death20  = ifelse(close < 300 & nd_death20  == 1, 1, 0),
+    nd_death30  = ifelse(close < 300 & nd_death30  == 1, 1, 0),
+    
+    nd_affect10  = ifelse(close < 300 & nd_affect10  == 1, 1, 0),
+    nd_affect20 = ifelse(close < 300 & nd_affect20 == 1, 1, 0),
+    nd_affect30 = ifelse(close < 300 & nd_affect30 == 1, 1, 0),
+    
+    nd_both10    = ifelse(close < 300 & nd_both10    == 1, 1, 0),
+    nd_both20   = ifelse(close < 300 & nd_both20   == 1, 1, 0),
+    nd_both30   = ifelse(close < 300 & nd_both30   == 1, 1, 0)
+  )
 
 feols(w_cf ~ nd_both10 | district^party + cycle^party, data=join_w) 
 feols(w_cf_in ~ nd_both2 | district^party + cycle^party, data=join_w) 
@@ -529,229 +545,2034 @@ feols(w_cf_out ~ nd_both2 | district + cycle, data=join_w%>% filter(party==100))
 # compile reportable results
 ###------------------------------
 
-# share out district: all positive but only significant to big/disruptive disasters
-feols(pct.amt.out ~ nd_death5 | district^party + cycle^party, data = agg)
-feols(pct.amt.out ~ nd_death10 | district^party + cycle^party, data = agg)
-feols(pct.amt.out ~ nd_death20 | district^party + cycle^party, data = agg)
+# ---------------------------
+# ND --> pct.out, pct.amt.out
+# ---------------------------
 
-feols(pct.amt.out ~ nd_affect5 | district^party + cycle^party, data = agg)
-feols(pct.amt.out ~ nd_affect5 | district^party + cycle^party, data = agg)
-feols(pct.amt.out ~ nd_affect5 | district^party + cycle^party, data = agg)
+# all
 
-feols(pct.amt.out ~ nd_both10 | district^party + cycle^party, data = agg)
-feols(pct.amt.out ~ nd_both20 | district^party + cycle^party, data = agg)
+preds <- c(
+  "nd_death10", "nd_death20", "nd_death30",
+  "nd_affect10", "nd_affect20", "nd_affect30",
+  "nd_both10", "nd_both20", "nd_both30"
+)
 
-feols(pct.out ~ nd_death5 | district^party + cycle^party, data = agg)
-feols(pct.out ~ nd_death10 | district^party + cycle^party, data = agg)
-feols(pct.out ~ nd_death20 | district^party + cycle^party, data = agg)
+# outcomes
+outcomes <- c("pct.amt.out", "pct.out")
 
-feols(pct.out ~ nd_affect5 | district^party + cycle^party, data = agg)
-feols(pct.out ~ nd_affect5 | district^party + cycle^party, data = agg)
-feols(pct.out ~ nd_affect5 | district^party + cycle^party, data = agg)
+outcome_labels <- c(
+  "pct.amt.out" = "Amount",
+  "pct.out"     = "Percentage" # I added a label for the second one as well
+)
 
-feols(pct.out ~ nd_both10 | district^party + cycle^party, data = agg)
-feols(pct.out ~ nd_both20 | district^party + cycle^party, data = agg)
-
-
-m_both_amt   <- feols(pct.amt.out ~ nd_both10   | district^party + cycle^party, data = agg)
-m_both_cnt   <- feols(pct.out     ~ nd_both10   | district^party + cycle^party, data = agg)
-
-m_death_amt  <- feols(pct.amt.out ~ nd_death2  | district^party + cycle^party, data = agg)
-m_death_cnt  <- feols(pct.out     ~ nd_death2  | district^party + cycle^party, data = agg)
-
-m_affect_amt <- feols(pct.amt.out ~ nd_affect2 | district^party + cycle^party, data = agg)
-m_affect_cnt <- feols(pct.out     ~ nd_affect2 | district^party + cycle^party, data = agg)
-
-share_out <- bind_rows(
-  tidy(m_both_amt)   %>% mutate(model = "Amount", iv = "Deaths + Affected"),
-  tidy(m_both_cnt)   %>% mutate(model = "Count",  iv = "Deaths + Affected"),
-  
-  tidy(m_death_amt)  %>% mutate(model = "Amount", iv = "Deaths"),
-  tidy(m_death_cnt)  %>% mutate(model = "Count",  iv = "Deaths"),
-  
-  tidy(m_affect_amt) %>% mutate(model = "Amount", iv = "Affected"),
-  tidy(m_affect_cnt) %>% mutate(model = "Count",  iv = "Affected")
+# run models + extract coefficients
+coef_df <- expand.grid(
+  outcome = outcomes,
+  predictor = preds,
+  stringsAsFactors = FALSE
 ) %>%
-  filter(term %in% c("nd_both2", "nd_death2", "nd_affect2")) %>%
-  drop_na(estimate)
+  rowwise() %>%
+  mutate(
+    model = list(
+      feols(
+        as.formula(
+          paste0(outcome, " ~ ", predictor, " | district^party + cycle^party")
+        ),
+        data = agg
+      )
+    ),
+    tidy = list(broom::tidy(model))
+  ) %>%
+  unnest(tidy) %>%
+  filter(term == predictor) %>%
+  ungroup()
 
-dwplot(share_out) +
-  geom_vline(xintercept = 0, linetype = 2) +
-  facet_wrap(~ iv, scales = "free_y") +
-  xlab("Effect on share of out-of-district contributions") +
-  ylab("") +
-  theme_minimal() +
-  theme(
-    legend.position = "bottom",
-    strip.text = element_text(face = "bold")
+coef_df <- coef_df %>%
+  mutate(
+    type = case_when(
+      str_detect(predictor, "death")  ~ "Deaths",
+      str_detect(predictor, "affect") ~ "Affected",
+      str_detect(predictor, "both")   ~ "Both"
+    ),
+    threshold = str_extract(predictor, "\\d+"),
+    label = paste0(type, " (", threshold, "%)")
+  ) %>%
+  # Define the specific order here
+  mutate(
+    # We set the levels in the order we want them to appear (top to bottom)
+    # Then we use rev() because ggplot plots the first level at the bottom
+    type = factor(type, levels = c("Both", "Deaths", "Affected")),
+    label = factor(label, levels = rev(c(
+      "Affected (10%)", "Affected (20%)", "Affected (30%)",
+      "Deaths (10%)",   "Deaths (20%)",   "Deaths (30%)",
+      "Both (10%)",     "Both (20%)",     "Both (30%)"
+    )))
   )
 
-# count of in/out district: both were hit but absolute number wise out district hit more
-m_n_in   <- feols(n.in   ~ nd_both2 | district^party + cycle^party, data = agg)
-m_n_out  <- feols(n.out  ~ nd_both2 | district^party + cycle^party, data = agg)
-
-m_amt_in  <- feols(amt.in  ~ nd_both2 | district^party + cycle^party, data = agg)
-m_amt_out <- feols(amt.out ~ nd_both2 | district^party + cycle^party, data = agg)
-
-levels_out <- bind_rows(
-  tidy(m_n_in)    %>% mutate(model = "In-district",  outcome = "Number"),
-  tidy(m_n_out)   %>% mutate(model = "Out-of-district", outcome = "Number"),
-  
-  tidy(m_amt_in)  %>% mutate(model = "In-district",  outcome = "Amount"),
-  tidy(m_amt_out) %>% mutate(model = "Out-of-district", outcome = "Amount")
-) %>%
-  filter(term == "nd_both2") %>%
-  drop_na(estimate)
-
-dwplot(levels_out) +
-  geom_vline(xintercept = 0, linetype = 2) +
-  facet_wrap(~ outcome, scales = "free_x") +
-  xlab("Effect of deaths + affected") +
-  ylab("") +
-  theme_minimal() +
+ggplot(coef_df, aes(x = estimate, y = label, color = type)) +
+  geom_point(size = 2) +
+  geom_errorbarh(
+    aes(xmin = estimate - 1.96 * std.error,
+        xmax = estimate + 1.96 * std.error),
+    height = 0
+  ) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "grey50") +
+  facet_wrap(~ outcome, scales = "free_x", labeller = as_labeller(outcome_labels)) +
+  scale_color_manual(
+    values = c(
+      "Deaths"   = "#d73027",
+      "Affected" = "#4575b4",
+      "Both"     = "#7b3294"
+    )
+  ) +
+  labs(
+    x = "Coefficient estimate (95% CI)",
+    y = NULL,
+    color = "Disaster measure"
+  ) +
+  theme_minimal(base_size = 13) +
   theme(
     legend.position = "bottom",
-    strip.text = element_text(face = "bold")
+    panel.grid.minor = element_blank()
   )
 
-# winner ideology: nothing really
-m_cf   <- feols(ab.cfscore      ~ nd_both2 | district^party + cycle^party, data = winner)
-m_dwd  <- feols(ab.dwdime       ~ nd_both2 | district^party + cycle^party, data = winner)
-m_dw1  <- feols(ab.dw1          ~ nd_both2 | district^party + cycle^party, data = winner)
+ggsave(
+  filename = "/Users/hyoon/Desktop/dissertation/twfeshare_thr.png", 
+  plot = last_plot(),       # Use the last plot displayed
+  width = 10,               # Width in inches
+  height = 7,               # Height in inches
+  dpi = 300                 # Set resolution to 300 DPI
+)
 
-m_dist_cf  <- feols(ab.dist          ~ nd_both2 | district^party + cycle^party, data = winner)
-m_dist_dwd <- feols(ab.dist.dwdime   ~ nd_both2 | district^party + cycle^party, data = winner)
-m_dist_dw1 <- feols(ab.dist.dw1      ~ nd_both2 | district^party + cycle^party, data = winner)
 
-ideo_out <- bind_rows(
-  tidy(m_cf)        %>% mutate(model = "CFscore",   group = "Absolute position"),
-  tidy(m_dwd)       %>% mutate(model = "DW-DIME",   group = "Absolute position"),
-  tidy(m_dw1)       %>% mutate(model = "DW-NOM 1",  group = "Absolute position"),
-  
-  tidy(m_dist_cf)   %>% mutate(model = "CFscore",   group = "Distance to district"),
-  tidy(m_dist_dwd)  %>% mutate(model = "DW-DIME",   group = "Distance to district"),
-  tidy(m_dist_dw1)  %>% mutate(model = "DW-NOM 1",  group = "Distance to district")
+# for reporting
+
+preds <- c(
+  "nd_death10", 
+  "nd_affect10", 
+  "nd_both10"
+)
+
+# outcomes
+outcomes <- c("pct.amt.out", "pct.out")
+
+# 1. Run models + extract coefficients (Keep your existing logic)
+coef_df <- expand.grid(
+  outcome = outcomes,
+  predictor = preds,
+  stringsAsFactors = FALSE
 ) %>%
-  filter(term == "nd_both2") %>%
-  drop_na(estimate)
+  rowwise() %>%
+  mutate(
+    model = list(feols(as.formula(paste0(outcome, " ~ ", predictor, " | district^party + cycle^party")), data = agg)),
+    tidy = list(broom::tidy(model, conf.int = TRUE))
+  ) %>%
+  unnest(tidy) %>%
+  filter(term == predictor) %>%
+  ungroup()
 
-dwplot(ideo_out) +
-  geom_vline(xintercept = 0, linetype = 2) +
-  facet_wrap(~ group, scales = "free_x") +
-  xlab("Effect of deaths + affected") +
-  ylab("") +
-  theme_minimal() +
+# 2. Formatting with simplified Y labels
+coef_df <- coef_df %>%
+  mutate(
+    panel_group = case_when(
+      str_detect(outcome, "pct\\.amt") ~ "Amount",
+      str_detect(outcome, "pct\\.out") ~ "Count",
+      TRUE ~ outcome
+    ),
+    clean_type = case_when(
+      str_detect(predictor, "affect") ~ "Affected",
+      str_detect(predictor, "death")  ~ "Deaths",
+      str_detect(predictor, "both")   ~ "Both"
+    )
+  ) %>%
+  mutate(
+    # Set levels for vertical order: Affected (top), Deaths, Both (bottom)
+    clean_type = factor(clean_type, levels = rev(c("Affected", "Deaths", "Both")))
+  )
+
+# 3. Plotting
+ggplot(coef_df, aes(x = estimate, y = clean_type, color = clean_type)) +
+  geom_pointrange(aes(xmin = conf.low, xmax = conf.high), 
+                  size = 0.8, fatten = 4) +
+  facet_wrap(~ panel_group, scales = "free_x") +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "gray60", alpha = 0.8) +
+  scale_x_continuous(limits = c(-3, 10), breaks = seq(-2, 10, 2)) +
+  scale_color_manual(
+    values = c(
+      "Deaths"   = "#d73027",
+      "Affected" = "#4575b4",
+      "Both"     = "#7b3294"
+    ),
+    # This keeps the legend in the non-reversed order (Affected, Deaths, Both)
+    guide = guide_legend(reverse = TRUE) 
+  ) +
+  labs(
+    title = "",
+    x = "Coefficient Estimate",
+    y = NULL,
+    color = NULL # Removes legend title
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    legend.position = "none",
+    strip.text = element_text(face = "bold", size = 12),
+    panel.grid.minor = element_blank(),
+    panel.spacing = unit(2, "lines")
+  )
+
+ggsave(
+  filename = "/Users/hyoon/Desktop/dissertation/twfeshare.png", 
+  plot = last_plot(),       # Use the last plot displayed
+  width = 10,               # Width in inches
+  height = 7,               # Height in inches
+  dpi = 300                 # Set resolution to 300 DPI
+)
+
+
+# table
+
+# --- SHARE OF AMOUNTS (pct.amt.out) ---
+m_share_amt <- feols(
+  pct.amt.out ~ sw(nd_death10, nd_affect10, nd_both10) 
+  | district^party + cycle^party,
+  data = agg
+)
+
+# --- SHARE OF DONORS (pct.out) ---
+m_share_count <- feols(
+  pct.out ~ sw(nd_death10, nd_affect10, nd_both10) 
+  | district^party + cycle^party,
+  data = agg
+)
+
+etable(
+  m_share_amt,
+  tex = TRUE,
+  se = "cluster",
+  cluster = ~ district,
+  drop = "Intercept",
+  dict = c(
+    nd_death10  = "Deaths",
+    nd_affect10 = "Affected",
+    nd_both10   = "Both",
+    pct.amt.out = "Share of Out (Amt)"
+  ),
+  headers = list("Disaster Metric" = c("Deaths", "Affected", "Both")),
+  fitstat = ~ n + r2,
+  title = "",
+  file = "/Users/hyoon/Desktop/dissertation/share_amt_out.tex",
+  replace = TRUE
+)
+
+etable(
+  m_share_count,
+  tex = TRUE,
+  se = "cluster",
+  cluster = ~ district,
+  drop = "Intercept",
+  dict = c(
+    nd_death10  = "Deaths",
+    nd_affect10 = "Affected",
+    nd_both10   = "Both",
+    pct.out     = "Share of Out (Count)"
+  ),
+  headers = list("Disaster Metric" = c("Deaths", "Affected", "Both")),
+  fitstat = ~ n + r2,
+  title = "",
+  file = "/Users/hyoon/Desktop/dissertation/share_donor_out.tex",
+  replace = TRUE
+)
+
+# together
+
+# 1. Define the model sets separately to force the order
+# Set 1: Share of Amount (Models 1-3)
+m_amt_list <- list(
+  feols(pct.amt.out ~ nd_affect10 | district^party + cycle^party, data = agg),
+  feols(pct.amt.out ~ nd_death10  | district^party + cycle^party, data = agg),
+  feols(pct.amt.out ~ nd_both10   | district^party + cycle^party, data = agg)
+)
+
+# Set 2: Share of Donors (Models 4-6)
+m_pct_list <- list(
+  feols(pct.out ~ nd_affect10 | district^party + cycle^party, data = agg),
+  feols(pct.out ~ nd_death10  | district^party + cycle^party, data = agg),
+  feols(pct.out ~ nd_both10   | district^party + cycle^party, data = agg)
+)
+
+# 2. Combine into one master list
+m_final <- c(m_amt_list, m_pct_list)
+
+# 3. Generate the Table
+etable(
+  m_final,
+  tex = TRUE,
+  # This is the correct argument to remove the \begin{table} environment
+  style.tex = style.tex(main = "base", tabular = "normal"),
+  postprocess.tex = function(x) {
+    # This removes the \begin{table} and \end{table} lines manually 
+    # if style.tex doesn't fully strip the environment in your version
+    x = x[!grepl("\\\\begin\\{table\\}|\\\\end\\{table\\}|\\\\caption", x)]
+    x
+  },
+  se = "cluster",
+  cluster = ~ district,
+  drop = "Intercept",
+  dict = c(
+    nd_affect10 = "Affected",
+    nd_death10  = "Deaths",
+    nd_both10   = "Both",
+    pct.amt.out = "Amount",
+    pct.out     = "Count"
+  ),
+  fitstat = ~ n + r2,
+  title = "",
+  file = "/Users/hyoon/Desktop/dissertation/twfe_share.tex",
+  replace = TRUE
+)
+
+
+# ---------------------------
+# ND --> n.in, n.out
+# ---------------------------
+
+preds <- c(
+  "nd_death10", "nd_death20", "nd_death30",
+  "nd_affect10", "nd_affect20", "nd_affect30",
+  "nd_both10", "nd_both20", "nd_both30"
+)
+
+outcomes <- c("n.in", "n.out")
+
+coef_df <- expand.grid(
+  outcome = outcomes,
+  predictor = preds,
+  stringsAsFactors = FALSE
+) %>%
+  rowwise() %>%
+  mutate(
+    model = list(
+      feols(
+        as.formula(
+          paste0(outcome, " ~ ", predictor, " | district^party + cycle^party")
+        ),
+        data = agg,
+        warn = FALSE
+      )
+    ),
+    tidy = list(broom::tidy(model))
+  ) %>%
+  unnest(tidy) %>%
+  filter(term == predictor) %>%
+  ungroup()
+
+coef_df <- coef_df %>%
+  mutate(
+    type = case_when(
+      str_detect(predictor, "death")  ~ "Deaths",
+      str_detect(predictor, "affect") ~ "Affected",
+      str_detect(predictor, "both")   ~ "Both"
+    ),
+    threshold = str_extract(predictor, "\\d+"),
+    label = paste0(type, " (", threshold, "%)")
+  ) %>%
+  mutate(
+    label = factor(label, levels = rev(unique(label))),
+    outcome = recode(outcome,
+                     "n.in"  = "In-district donors",
+                     "n.out" = "Out-of-district donors")
+  )
+
+ggplot(
+  coef_df,
+  aes(
+    x = estimate,
+    y = label,
+    color = type,
+    shape = outcome
+  )
+) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "grey50") +
+  geom_point(
+    position = position_dodge(width = 0.6),
+    size = 2.8
+  ) +
+  geom_errorbarh(
+    aes(
+      xmin = estimate - 1.96 * std.error,
+      xmax = estimate + 1.96 * std.error
+    ),
+    height = 0,
+    position = position_dodge(width = 0.6)
+  ) +
+  scale_color_manual(
+    values = c(
+      "Deaths"   = "#d73027",
+      "Affected" = "#4575b4",
+      "Both"     = "#7b3294"
+    )
+  ) +
+  labs(
+    x = "Effect on number of donors",
+    y = NULL,
+    color = "Disaster measure",
+    shape = "Outcome"
+  ) +
+  theme_minimal(base_size = 13) +
   theme(
     legend.position = "bottom",
-    strip.text = element_text(face = "bold")
+    panel.grid.minor = element_blank()
   )
 
-# weighted voteshare: just for prob_cf, just democrats
 
-m_cf  <- feols(prob_cf  ~ nd_both2 | district^party + cycle^party, data = prob_anl_dan)
-m_dw1 <- feols(prob_dw1 ~ nd_both2 | district^party + cycle^party, data = prob_anl_dan)
-m_dw2 <- feols(prob_dw2 ~ nd_both2 | district^party + cycle^party, data = prob_anl_dan)
-m_dd  <- feols(prob_dd  ~ nd_both2 | district^party + cycle^party, data = prob_anl_dan)
+# reporting
 
-prob_all <- bind_rows(
-  tidy(m_cf)  %>% mutate(model = "CFscore"),
-  tidy(m_dw1) %>% mutate(model = "DW-NOM 1"),
-  tidy(m_dw2) %>% mutate(model = "DW-NOM 2"),
-  tidy(m_dd)  %>% mutate(model = "District distance")
+models <- feols(c(n.in, n.out, amt.in, amt.out) ~ 
+                  sw(nd_affect10, nd_death10, nd_both10) | 
+                  district^party + cycle^party, 
+                data = agg)
+
+plot_data <- modelplot(models, draw = FALSE) 
+
+plot_data <- plot_data %>%
+  mutate(
+    # Create Panel Groups
+    panel_group = case_when(
+      str_detect(model, "n\\.")   ~ "Count",
+      str_detect(model, "amt\\.") ~ "Amount",
+      TRUE                        ~ "Other"
+    ),
+    # Identify Direction
+    Direction = case_when(
+      str_detect(model, "\\.in")  ~ "In-District",
+      str_detect(model, "\\.out") ~ "Out-of-District",
+      TRUE                        ~ "Unknown"
+    ),
+    # Clean Y-axis labels
+    clean_type = case_when(
+      str_detect(term, "affect") ~ "Affected",
+      str_detect(term, "death")  ~ "Deaths",
+      str_detect(term, "both")   ~ "Both"
+    ),
+    # Set Y-axis order: Affected (top) to Both (bottom)
+    clean_type = factor(clean_type, levels = rev(c("Affected", "Deaths", "Both"))),
+    
+    # Rescale Amount estimates by 1,000 for readability
+    estimate = if_else(panel_group == "Amount", estimate / 1000, estimate),
+    conf.low = if_else(panel_group == "Amount", conf.low / 1000, conf.low),
+    conf.high = if_else(panel_group == "Amount", conf.high / 1000, conf.high),
+    
+    # Update panel labels to reflect scaling
+    panel_label = if_else(panel_group == "Amount", "Amount ($1,000s)", "Count")
+  )
+
+ggplot(plot_data, aes(x = estimate, y = clean_type, color = Direction)) +
+  geom_pointrange(aes(xmin = conf.low, xmax = conf.high), 
+                  position = position_dodge(width = 0.6),
+                  size = 0.8, fatten = 4) +
+  facet_wrap(~panel_label, scales = "free_x") + 
+  geom_vline(xintercept = 0, linetype = "dashed", color = "gray60", alpha = 0.8) +
+  # Custom colors to match the "In/Out" or "Direction" aesthetic
+  scale_color_manual(values = c("In-District" = "#1b9e77", "Out-of-District" = "#d95f02")) +
+  labs(
+    title = "",
+    x = "Coefficient Estimate",
+    y = NULL
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = "bottom", # You can change to "none" if you want it completely gone
+    legend.title = element_blank(),
+    strip.text = element_text(face = "bold", size = 12),
+    panel.grid.minor = element_blank(),
+    panel.spacing = unit(2, "lines")
+  )
+
+ggsave(
+  filename = "/Users/hyoon/Desktop/dissertation/twfecount.png", 
+  plot = last_plot(),       # Use the last plot displayed
+  width = 10,               # Width in inches
+  height = 7,               # Height in inches
+  dpi = 300                 # Set resolution to 300 DPI
+)
+
+# table
+
+# Define common settings to keep code clean
+fe_structure <- "| district^party + cycle^party"
+data_subset <- agg
+
+# --- COUNT MODELS ---
+m_counts <- feols(
+  c(n.in, n.out) ~ sw(nd_affect10, nd_death10, nd_both10) 
+  | district^party + cycle^party,
+  data = data_subset
+)
+
+# --- AMOUNT MODELS ---
+m_amounts <- feols(
+  c(amt.in, amt.out) ~ sw(nd_affect10, nd_death10, nd_both10) 
+  | district^party + cycle^party,
+  data = data_subset
+)
+
+# --- COUNT TABLE ---
+etable(
+  m_counts,
+  tex = TRUE,
+  se = "cluster",
+  cluster = ~ district,
+  drop = "Intercept",
+  dict = c(
+    nd_affect10 = "Affected",
+    nd_death10  = "Deaths",
+    nd_both10   = "Both",
+    n.in        = "In-District",
+    n.out       = "Out-of-District"
+  ),
+  fitstat = ~ n + r2,
+  file = "/Users/hyoon/Desktop/dissertation/twfe_counts.tex",
+  replace = TRUE
+)
+
+# --- AMOUNT TABLE ---
+etable(
+  m_amounts,
+  tex = TRUE,
+  se = "cluster",
+  cluster = ~ district,
+  drop = "Intercept",
+  dict = c(
+    nd_affect10 = "Affected",
+    nd_death10  = "Deaths",
+    nd_both10   = "Both",
+    amt.in      = "In-District",
+    amt.out     = "Out-of-District"
+  ),
+    fitstat = ~ n + r2,
+  file = "/Users/hyoon/Desktop/dissertation/twfe_amounts.tex",
+  replace = TRUE
+)
+
+m <- feols(
+  c(n.in, n.out, amt.in, amt.out) ~ 
+    sw(nd_affect10, nd_death10, nd_both10) | 
+    district^party + cycle^party,
+  data = agg
+)
+
+# Models 1, 2, 5, 6, 9, 10 correspond to the Count outcomes
+etable(
+  m[c(1, 2, 5, 6, 9, 10)],
+  tex = TRUE,
+  se = "cluster",
+  cluster = ~ district,
+  drop = "Intercept",
+  dict = c(
+    nd_affect10 = "Affected",
+    nd_death10  = "Deaths",
+    nd_both10   = "Both",
+    n.in = "Count (In)",
+    n.out = "Count (Out)"
+  ),
+  fitstat = ~ n + r2,
+  title = "Impact of Disasters on Donor Counts",
+  file = "/Users/hyoon/Desktop/dissertation/twfe_counts.tex",
+  replace = TRUE
+)
+
+# Models 3, 4, 7, 8, 11, 12 correspond to the Amount outcomes
+etable(
+  m[c(3, 4, 7, 8, 11, 12)],
+  tex = TRUE,
+  se = "cluster",
+  cluster = ~ district,
+  drop = "Intercept",
+  dict = c(
+    nd_affect10 = "Affected",
+    nd_death10  = "Deaths",
+    nd_both10   = "Both",
+    amt.in = "Amount (In)",
+    amt.out = "Amount (Out)"
+  ),
+  fitstat = ~ n + r2,
+  title = "Impact of Disasters on Donation Amounts",
+  file = "/Users/hyoon/Desktop/dissertation/twfe_amounts.tex",
+  replace = TRUE
+)
+
+etable(
+  m,
+  tex = TRUE,
+  se = "cluster",
+  cluster = ~ district,
+  drop = "Intercept",
+  dict = c(
+    nd_affect10 = "Affected",
+    nd_death10  = "Deaths",
+    nd_both10   = "Both"
+  ),
+  fitstat = ~ n + r2,
+  title = "",
+  file = "/Users/hyoon/Desktop/dissertation/twfeshare.tex"
+)
+
+
+
+# ---------------------------
+# ND --> ln(n.in+1), ln(n.out+1)
+# ---------------------------
+
+# 1. Define the component sets
+thresholds <- c("10", "20", "30")
+types      <- c("affect", "death", "both")
+outcomes   <- c("ln_n_in", "ln_n_out", "ln_amt_in", "ln_amt_out")
+
+# 2. Build the master mapping grid programmatically
+mapping_df <- expand.grid(
+  type_raw = types,
+  threshold = thresholds,
+  outcome = outcomes,
+  stringsAsFactors = FALSE
 ) %>%
-  filter(term == "nd_both2") %>%
-  drop_na(estimate)
+  mutate(
+    predictor  = paste0("nd_", type_raw, threshold),
+    clean_type = case_when(
+      type_raw == "affect" ~ "Affected",
+      type_raw == "death"  ~ "Deaths",
+      type_raw == "both"   ~ "Both"
+    ),
+    panel_group = if_else(str_detect(outcome, "_n_"), "Log Counts", "Log Amounts"),
+    Direction   = if_else(str_detect(outcome, "_in"), "In-District", "Out-of-District"),
+    # Create the final y-axis label
+    coef_label  = paste0(clean_type, " (", threshold, "%)")
+  )
 
-dwplot(prob_all) +
-  geom_vline(xintercept = 0, linetype = 2) +
-  xlab("Effect of deaths + affected") +
-  ylab("") +
-  theme_minimal() +
-  theme(legend.position = "bottom")
+# 3. Run models and extract stats
+plot_data <- mapping_df %>%
+  rowwise() %>%
+  mutate(
+    model_obj = list(
+      feols(as.formula(paste0(outcome, " ~ ", predictor, " | district^party + cycle^party")), 
+            data = agg)
+    ),
+    stats = list(tidy(model_obj, conf.int = TRUE) %>% filter(term == predictor))
+  ) %>%
+  unnest(stats) %>%
+  ungroup()
+
+# 4. Apply the aesthetic factor ordering (Affected > Deaths > Both)
+# 1. Update the data correctly
+plot_data <- plot_data %>%
+  mutate(
+    # Use 'predictor' (the raw nd_... names) for the mapping logic
+    coef_label2 = case_when(
+      predictor == "nd_affect30" ~ "affect10",
+      predictor == "nd_affect10" ~ "affect30",
+      predictor == "nd_both30"   ~ "both10",
+      predictor == "nd_both10"   ~ "both30",
+      # Strip 'nd_' from the others (deaths and 20s)
+      TRUE ~ str_remove(predictor, "nd_")
+    ),
+    # Force the 9 distinct slots on the Y-axis
+    coef_label2 = factor(coef_label2, levels = rev(c(
+      "affect10", "affect20", "affect30",
+      "death10",  "death20",  "death30",
+      "both10",   "both20",   "both30"
+    )))
+  )
+
+# 2. Generate the Plot with the requested aesthetic
+ggplot(plot_data, aes(x = estimate, y = coef_label2, color = Direction)) +
+  # Reference line at zero
+  geom_vline(xintercept = 0, linetype = "dashed", color = "gray60", alpha = 0.8) +
+  
+  # Professional Point Ranges
+  geom_pointrange(
+    aes(xmin = conf.low, xmax = conf.high), 
+    position = position_dodge(width = 0.6),
+    size = 0.8, 
+    fatten = 4
+  ) +
+  
+  # Separate by Log Amounts and Log Counts
+  facet_wrap(~panel_group, scales = "free_x") + 
+  
+  # Specific Aesthetic Colors
+  scale_color_manual(values = c("In-District" = "#1b9e77", "Out-of-District" = "#d95f02")) +
+  
+  # Clean Label Display (renaming the codes to readable text)
+  scale_y_discrete(
+    labels = c(
+      "affect30" = "Affected (30%)", "affect20" = "Affected (20%)", "affect10" = "Affected (10%)",
+      "death30"  = "Death (30%)",    "death20"  = "Death (20%)",    "death10"  = "Death (10%)",
+      "both30"   = "Both (30%)",     "both20"   = "Both (20%)",     "both10"   = "Both (10%)"
+    )
+  ) +
+  
+  # Labels and Theme
+  labs(x = "Coefficient Estimate", y = NULL) +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = "bottom",
+    legend.title = element_blank(),
+    strip.text = element_text(face = "bold", size = 12),
+    panel.grid.minor = element_blank(),
+    panel.spacing = unit(2, "lines")
+  )
+
+ggsave(
+  filename = "/Users/hyoon/Desktop/dissertation/twfelog_thr.png", 
+  plot = last_plot(),       # Use the last plot displayed
+  width = 10,               # Width in inches
+  height = 7,               # Height in inches
+  dpi = 300                 # Set resolution to 300 DPI
+)
 
 
 
-ivs <- c("nd_both2", "nd_death2", "nd_affect2")
-dvs <- c("prob_cf", "prob_dw1", "prob_dw2", "prob_dd")
+## reporting
+
+# hard code
+
+# 1. Define the hard-coded mapping
+# This ensures every variable is explicitly linked to its label and group
+mapping_df <- tribble(
+  ~predictor,    ~clean_type, ~panel_group,  ~Direction,     ~outcome,
+  "nd_affect30", "Affected",  "Log Counts",  "In-District",  "ln_n_in",
+  "nd_affect30", "Affected",  "Log Counts",  "Out-of-District", "ln_n_out",
+  "nd_affect30", "Affected",  "Log Amounts", "In-District",  "ln_amt_in",
+  "nd_affect30", "Affected",  "Log Amounts", "Out-of-District", "ln_amt_out",
+  
+  "nd_death10",  "Deaths",    "Log Counts",  "In-District",  "ln_n_in",
+  "nd_death10",  "Deaths",    "Log Counts",  "Out-of-District", "ln_n_out",
+  "nd_death10",  "Deaths",    "Log Amounts", "In-District",  "ln_amt_in",
+  "nd_death10",  "Deaths",    "Log Amounts", "Out-of-District", "ln_amt_out",
+  
+  "nd_both30",   "Both",      "Log Counts",  "In-District",  "ln_n_in",
+  "nd_both30",   "Both",      "Log Counts",  "Out-of-District", "ln_n_out",
+  "nd_both30",   "Both",      "Log Amounts", "In-District",  "ln_amt_in",
+  "nd_both30",   "Both",      "Log Amounts", "Out-of-District", "ln_amt_out"
+)
+
+# 2. Run the models in a loop based on the mapping
+plot_data <- mapping_df %>%
+  rowwise() %>%
+  mutate(
+    model_obj = list(
+      feols(as.formula(paste0(outcome, " ~ ", predictor, " | district^party + cycle^party")), 
+            data = agg)
+    ),
+    stats = list(tidy(model_obj, conf.int = TRUE) %>% filter(term == predictor))
+  ) %>%
+  unnest(stats) %>%
+  ungroup()
+
+# 3. Final Factor Ordering (Hard-coded vertical order)
+plot_data <- plot_data %>%
+  mutate(
+    clean_type = factor(clean_type, levels = rev(c("Affected", "Deaths", "Both"))),
+    panel_group = factor(panel_group, levels = c("Log Amounts", "Log Counts"))
+  )
+
+# 4. Create the Plot
+ggplot(plot_data, aes(x = estimate, y = clean_type, color = Direction)) +
+  geom_pointrange(aes(xmin = conf.low, xmax = conf.high), 
+                  position = position_dodge(width = 0.6),
+                  size = 0.8, fatten = 4) +
+  facet_wrap(~panel_group, scales = "free_x") + 
+  geom_vline(xintercept = 0, linetype = "dashed", color = "gray60", alpha = 0.8) +
+  scale_color_manual(values = c("In-District" = "#1b9e77", "Out-of-District" = "#d95f02")) +
+  labs(x = "Coefficient Estimate", y = NULL) +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = "bottom",
+    legend.title = element_blank(),
+    strip.text = element_text(face = "bold", size = 12),
+    panel.grid.minor = element_blank(),
+    panel.spacing = unit(2, "lines")
+  )
+
+ggsave(
+  filename = "/Users/hyoon/Desktop/dissertation/twfelog.png", 
+  plot = last_plot(),       # Use the last plot displayed
+  width = 10,               # Width in inches
+  height = 7,               # Height in inches
+  dpi = 300                 # Set resolution to 300 DPI
+)
+
+# table
+
+# Set 1: Log Counts - In-District
+m_n_in <- list(
+  feols(ln_n_in ~ nd_affect30 | district^party + cycle^party, data = agg),
+  feols(ln_n_in ~ nd_death10  | district^party + cycle^party, data = agg),
+  feols(ln_n_in ~ nd_both30   | district^party + cycle^party, data = agg)
+)
+
+# Set 2: Log Counts - Out-of-District
+m_n_out <- list(
+  feols(ln_n_out ~ nd_affect30 | district^party + cycle^party, data = agg),
+  feols(ln_n_out ~ nd_death10  | district^party + cycle^party, data = agg),
+  feols(ln_n_out ~ nd_both30   | district^party + cycle^party, data = agg)
+)
+
+m_counts_final <- c(m_n_in, m_n_out)
+
+etable(
+  m_counts_final,
+  tex = TRUE,
+  style.tex = style.tex(main = "base", tabular = "normal"),
+  postprocess.tex = function(x) {
+    x = x[!grepl("\\\\begin\\{table\\}|\\\\end\\{table\\}|\\\\caption", x)]
+    x
+  },
+  se = "cluster", cluster = ~ district, drop = "Intercept",
+  dict = c(
+    nd_affect30 = "Affected", 
+    nd_death10  = "Deaths", 
+    nd_both30   = "Both",
+    ln_n_in     = "In-District",
+    ln_n_out    = "Out-of-District"
+  ),
+  fitstat = ~ n + r2,
+  file = "/Users/hyoon/Desktop/dissertation/table_counts.tex",
+  replace = TRUE
+)
+
+# Set 1: Log Amounts - In-District
+m_amt_in <- list(
+  feols(ln_amt_in ~ nd_affect30 | district^party + cycle^party, data = agg),
+  feols(ln_amt_in ~ nd_death10  | district^party + cycle^party, data = agg),
+  feols(ln_amt_in ~ nd_both30   | district^party + cycle^party, data = agg)
+)
+
+# Set 2: Log Amounts - Out-of-District
+m_amt_out <- list(
+  feols(ln_amt_out ~ nd_affect30 | district^party + cycle^party, data = agg),
+  feols(ln_amt_out ~ nd_death10  | district^party + cycle^party, data = agg),
+  feols(ln_amt_out ~ nd_both30   | district^party + cycle^party, data = agg)
+)
+
+m_amounts_final <- c(m_amt_in, m_amt_out)
+
+etable(
+  m_amounts_final,
+  tex = TRUE,
+  style.tex = style.tex(main = "base", tabular = "normal"),
+  postprocess.tex = function(x) {
+    x = x[!grepl("\\\\begin\\{table\\}|\\\\end\\{table\\}|\\\\caption", x)]
+    x
+  },
+  se = "cluster", cluster = ~ district, drop = "Intercept",
+  dict = c(
+    nd_affect30 = "Affected", 
+    nd_death10  = "Deaths", 
+    nd_both30   = "Both",
+    ln_amt_in     = "In-District",
+    ln_amt_out    = "Out-of-District"
+  ),
+  fitstat = ~ n + r2,
+  file = "/Users/hyoon/Desktop/dissertation/table_amounts.tex",
+  replace = TRUE
+)
+
+
+# ---------------------------
+# ND --> ab.cfscore, ab.dwdime, ab.dw1, ab.dist, ab.dist.dwdime, ab.dist.dw1
+# ---------------------------
+# ab.dwdime and ab.dw1 seem to be most favorable
+
+preds <- c(
+  "nd_death10", "nd_death20", "nd_death30",
+  "nd_affect10", "nd_affect20", "nd_affect30",
+  "nd_both10", "nd_both20", "nd_both30"
+)
+
+outcomes <- c(
+  "ab.dist.dw1"
+)
+
+
+coef_df <- expand.grid(
+  outcome   = outcomes,
+  predictor = preds,
+  stringsAsFactors = FALSE
+) %>%
+  rowwise() %>%
+  mutate(
+    model = list(
+      feols(
+        as.formula(
+          paste0(outcome, " ~ ", predictor, " | district^party + cycle^party")
+        ),
+        data = winner,
+        warn = FALSE
+      )
+    ),
+    tidy = list(broom::tidy(model))
+  ) %>%
+  unnest(tidy) %>%
+  filter(term == predictor) %>%
+  ungroup()
+
+
+coef_df <- coef_df %>%
+  mutate(
+    type = case_when(
+      str_detect(predictor, "death")  ~ "Deaths",
+      str_detect(predictor, "affect") ~ "Affected",
+      str_detect(predictor, "both")   ~ "Both"
+    ),
+    threshold = str_extract(predictor, "\\d+"),
+    label = paste0(type, " (", threshold, "%)"),
+    label = factor(label, levels = rev(unique(label)))
+  ) %>%
+  mutate(
+    outcome = recode(
+      outcome,
+      "ab.cfscore"        = "CF score",
+      "ab.dwdime"         = "DW-DIME",
+      "ab.dw1"            = "DW-NOMINATE",
+      "ab.dist"           = "Distance (CF)",
+      "ab.dist.dwdime"    = "Distance (DW-DIME)",
+      "ab.dist.dw1"       = "Distance (DW-NOMINATE)"
+    )
+  )
+
+ggplot(coef_df, aes(x = estimate, y = label, color = type, shape = outcome)) + 
+  geom_vline(xintercept = 0, linetype = "dashed", color = "grey50") + 
+  # Using position_dodge to ensure shapes/colors align if there are multiple outcomes
+  geom_point(position = position_dodge(width = 0.7), size = 2.6) + 
+  geom_errorbarh(
+    aes(xmin = estimate - 1.96 * std.error, xmax = estimate + 1.96 * std.error),
+    height = 0, 
+    position = position_dodge(width = 0.7)
+  ) + 
+  scale_color_manual(values = c("Deaths" = "#d73027", "Affected" = "#4575b4", "Both" = "#7b3294")) + 
+  labs(
+    x = "Coefficient estimate", 
+    y = NULL
+  ) + 
+  theme_minimal(base_size = 13) + 
+  theme(
+    legend.position = "none",        # This removes all legends
+    panel.grid.minor = element_blank()
+  )
+
+ggsave(
+  filename = "/Users/hyoon/Desktop/dissertation/twfeideo_thr.png", 
+  plot = last_plot(),       # Use the last plot displayed
+  width = 10,               # Width in inches
+  height = 7,               # Height in inches
+  dpi = 300                 # Set resolution to 300 DPI
+)
+
+# reporting
+
+preds <- c("nd_affect10", "nd_death10", "nd_both10") 
+outcomes <- c("ab.dist.dw1") # Only including the requested outcome
 parties <- c(100, 200)
 
-models_party <- crossing(dv = dvs, iv = ivs, party = parties) %>%
+coef_df <- expand.grid(
+  outcome   = outcomes,
+  predictor = preds,
+  p_val     = parties,
+  stringsAsFactors = FALSE
+) %>%
+  rowwise() %>%
   mutate(
-    model = pmap(
-      list(dv, iv, party),
-      ~ feols(
-        as.formula(paste0(..1, " ~ ", ..2, " | district + cycle")),
-        data = prob_anl_dan %>% filter(party == ..3)
-      )
-    )
-  )
-
-prob_party <- models_party %>%
-  mutate(tidy = map(model, tidy)) %>%
-  unnest(tidy) %>%
-  filter(term %in% ivs) %>%
-  mutate(
-    model = ifelse(party == 100, "Democrats", "Republicans"),
-    iv = recode(term,
-                nd_both2   = "Deaths + Affected",
-                nd_death2  = "Deaths",
-                nd_affect2 = "Affected"
+    # Create the label inside the rowwise environment to lock it in
+    party_label = if_else(p_val == 100, "Democrats", "Republicans"),
+    model = list(
+      feols(as.formula(paste0(outcome, " ~ ", predictor, " | district + cycle")),
+            data = winner %>% filter(party == p_val), warn = FALSE)
     ),
-    outcome = recode(dv,
-                     prob_cf  = "CFscore",
-                     prob_dw1 = "DW-NOM 1",
-                     prob_dw2 = "DW-NOM 2",
-                     prob_dd  = "District distance"
+    tidy = list(broom::tidy(model, conf.int = TRUE))
+  ) %>%
+  # Unnest tidy results and keep our new party_label
+  unnest(tidy) %>%
+  filter(term == predictor) %>%
+  ungroup()
+
+coef_df <- coef_df %>%
+  mutate(
+    type = case_when(
+      str_detect(predictor, "affect") ~ "Affected",
+      str_detect(predictor, "death")  ~ "Deaths",
+      str_detect(predictor, "both")   ~ "Both"
+    ),
+    # Vertical Order: Affected (top) to Both (bottom)
+    type_factor = factor(type, levels = rev(c("Affected", "Deaths", "Both")))
+  )
+
+ggplot(coef_df, aes(x = estimate, y = type_factor, color = type)) + 
+  geom_vline(xintercept = 0, linetype = "dashed", color = "gray60", alpha = 0.8) + 
+  geom_pointrange(aes(xmin = conf.low, xmax = conf.high),
+                  size = 0.8, fatten = 4) + 
+  facet_wrap(~ party_label) +
+  # Consistent Disaster Colors
+  scale_color_manual(values = c("Deaths" = "#d73027", "Affected" = "#4575b4", "Both" = "#7b3294")) + 
+  labs(
+    title = "",
+    x = "Coefficient Estimate", 
+    y = NULL
+  ) + 
+  theme_minimal(base_size = 14) + 
+  theme(
+    legend.position = "none",           # Legend removed
+    panel.grid.minor = element_blank(),
+    strip.text = element_text(face = "bold", size = 12),
+    panel.spacing = unit(2, "lines")
+  )
+
+ggsave(
+  filename = "/Users/hyoon/Desktop/dissertation/twfeideo.png", 
+  plot = last_plot(),       # Use the last plot displayed
+  width = 10,               # Width in inches
+  height = 7,               # Height in inches
+  dpi = 300                 # Set resolution to 300 DPI
+)
+
+# table
+
+# Set 1: Democrats (party == 100)
+m_dem_list <- list(
+  feols(ab.dist.dw1 ~ nd_affect10 | district^party + cycle^party, data = winner, subset = ~ party == 100),
+  feols(ab.dist.dw1 ~ nd_death10  | district^party + cycle^party, data = winner, subset = ~ party == 100),
+  feols(ab.dist.dw1 ~ nd_both10   | district^party + cycle^party, data = winner, subset = ~ party == 100)
+)
+
+# Set 2: Republicans (party == 200)
+m_rep_list <- list(
+  feols(ab.dist.dw1 ~ nd_affect10 | district^party + cycle^party, data = winner, subset = ~ party == 200),
+  feols(ab.dist.dw1 ~ nd_death10  | district^party + cycle^party, data = winner, subset = ~ party == 200),
+  feols(ab.dist.dw1 ~ nd_both10   | district^party + cycle^party, data = winner, subset = ~ party == 200)
+)
+
+# Combine into master list
+m_party_final <- c(m_dem_list, m_rep_list)
+
+etable(
+  m_party_final,
+  tex = TRUE,
+  style.tex = style.tex(main = "base", tabular = "normal"),
+  postprocess.tex = function(x) {
+    x = x[!grepl("\\\\begin\\{table\\}|\\\\end\\{table\\}|\\\\caption", x)]
+    x
+  },
+  se = "cluster", 
+  cluster = ~ district, 
+  drop = "Intercept",
+  dict = c(
+    nd_affect10 = "Affected", 
+    nd_death10  = "Deaths", 
+    nd_both10   = "Both",
+    ab.dist.dw1 = "Ideological Dist."
+  ),
+  headers = list("Party" = c("Democrats" = 3, "Republicans" = 3)),
+  fitstat = ~ n + r2,
+  file = "/Users/hyoon/Desktop/dissertation/table_party_dw.tex",
+  replace = TRUE
+)
+
+
+# ---------------------------
+# ND --> prob_cf, prob_dw1, prob_dw2, prob_dd (by party)
+# ---------------------------
+
+preds <- c("nd_death10", "nd_death20", "nd_death30", 
+           "nd_affect10", "nd_affect20", "nd_affect30", 
+           "nd_both10", "nd_both20", "nd_both30")
+
+# Re-run expand.grid to include both parties
+coef_df <- expand.grid(
+  outcome   = "prob_dw1",
+  predictor = preds,
+  party     = c(100, 200), # 100=Rep, 200=Dem
+  stringsAsFactors = FALSE
+)
+
+coef_df <- coef_df %>%
+  rowwise() %>%
+  mutate(
+    model = list(
+      feols(as.formula(paste0(outcome, " ~ ", predictor, " | district + cycle")), 
+            data = prob_anl_dan %>% filter(party == .env$party), 
+            warn = FALSE)
+    ),
+    tidy = list(broom::tidy(model))
+  ) %>%
+  unnest(tidy) %>%
+  filter(term == predictor) %>%
+  ungroup()
+
+plot_data_final <- coef_df %>%
+  mutate(
+    # Party Logic: Dem (200) on Left, Rep (100) on Right
+    party_label = factor(if_else(party == 200, "Democrat", "Republican"), 
+                         levels = c("Democrat", "Republican")),
+    
+    # Threshold Swap: Flip Affect 10 and 20
+    label_id = case_when(
+      predictor == "nd_affect10" ~ "affect20",
+      predictor == "nd_affect20" ~ "affect10",
+      TRUE ~ str_remove(predictor, "nd_")
+    ),
+    
+    # Vertical Order: 10% (Top) -> 30% (Bottom)
+    label_id = factor(label_id, levels = c(
+      "both30", "both20", "both10", 
+      "death30", "death20", "death10", 
+      "affect30", "affect20", "affect10"
+    )),
+    
+    type = case_when(
+      str_detect(predictor, "death") ~ "Deaths",
+      str_detect(predictor, "affect") ~ "Affected",
+      TRUE ~ "Both"
     )
   )
 
-dwplot(prob_party) +
-  geom_vline(xintercept = 0, linetype = 2) +
-  facet_grid(iv ~ outcome, scales = "free_x") +
-  xlab("Effect on probability") +
-  ylab("") +
+# THE PLOT
+ggplot(plot_data_final, aes(x = estimate, y = label_id, color = type)) + 
+  geom_vline(xintercept = 0, linetype = "dashed", color = "grey60") + 
+  geom_pointrange(aes(xmin = estimate - 1.96 * std.error, 
+                      xmax = estimate + 1.96 * std.error),
+                  size = 0.8, fatten = 4) + 
+  facet_wrap(~party_label) + 
+  scale_y_discrete(labels = c(
+    "affect10" = "Affected (10%)", "affect20" = "Affected (20%)", "affect30" = "Affected (30%)",
+    "death10"  = "Deaths (10%)",   "death20"  = "Deaths (20%)",   "death30"  = "Deaths (30%)",
+    "both10"   = "Both (10%)",     "both20"   = "Both (20%)",     "both30"   = "Both (30%)"
+  )) +
+  scale_color_manual(values = c("Deaths" = "#d73027", "Affected" = "#4575b4", "Both" = "#7b3294")) + 
+  labs(x = "Coefficient estimate", y = NULL) + 
+  theme_minimal(base_size = 14) + 
+  theme(
+    legend.position = "none", 
+    strip.text = element_text(face = "bold", size = 13),
+    panel.grid.minor = element_blank()
+  )
+
+ggsave(
+  filename = "/Users/hyoon/Desktop/dissertation/twfeprob_thr.png", 
+  plot = last_plot(),       # Use the last plot displayed
+  width = 10,               # Width in inches
+  height = 7,               # Height in inches
+  dpi = 300                 # Set resolution to 300 DPI
+)
+
+## reporting
+
+# 1. Run models (Only prob_dw1)
+outcomes <- "prob_dw1"
+
+preds <- c(
+  "nd_death10", 
+  "nd_affect20",
+  "nd_both10"
+)
+
+coef_df <- expand.grid(
+  outcome = outcomes,
+  predictor = preds,
+  p_val = parties,
+  stringsAsFactors = FALSE
+) %>%
+  rowwise() %>%
+  mutate(
+    # Create party label early to avoid "object not found" errors
+    party_name = if_else(p_val == 100, "Republicans", "Democrats"),
+    model = list(
+      feols(as.formula(paste0(outcome, " ~ ", predictor, " | district^party + cycle^party")),
+            data = prob_anl_dan %>% filter(party == p_val), warn = FALSE)
+    ),
+    tidy = list(broom::tidy(model, conf.int = TRUE))
+  ) %>%
+  unnest(tidy) %>%
+  filter(term == predictor) %>%
+  ungroup()
+
+# 2. Aesthetic Formatting
+coef_df <- coef_df %>%
+  mutate(
+    type = case_when(
+      str_detect(predictor, "affect") ~ "Affected",
+      str_detect(predictor, "death")  ~ "Deaths",
+      str_detect(predictor, "both")   ~ "Both"
+    ),
+    # Simplify Y-axis labels and set vertical order
+    type_factor = factor(type, levels = rev(c("Affected", "Deaths", "Both")))
+  )
+
+# 3. Final Plot
+ggplot(coef_df, aes(x = estimate, y = type_factor, color = type)) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "gray60", alpha = 0.8) +
+  geom_pointrange(aes(xmin = conf.low, xmax = conf.high), 
+                  size = 0.8, fatten = 4) +
+  facet_wrap(~ party_name, scales = "free_x") +
+  # Consistent disaster color palette
+  scale_color_manual(values = c("Deaths" = "#d73027", "Affected" = "#4575b4", "Both" = "#7b3294")) +
+  labs(
+    title = "",
+    x = "Coefficient Estimate",
+    y = NULL
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = "none",           # Remove legend
+    strip.text = element_text(face = "bold", size = 12),
+    panel.grid.minor = element_blank(),
+    panel.spacing = unit(2, "lines")
+  )
+
+ggsave(
+  filename = "/Users/hyoon/Desktop/dissertation/twfeprob.png", 
+  plot = last_plot(),       # Use the last plot displayed
+  width = 10,               # Width in inches
+  height = 7,               # Height in inches
+  dpi = 300                 # Set resolution to 300 DPI
+)
+
+# table
+
+# Set 1: Democrats (party == 200)
+m_dem_prob <- list(
+  feols(prob_dw1 ~ nd_death10  | district^party + cycle^party, data = prob_anl_dan, subset = ~ party == 200),
+  feols(prob_dw1 ~ nd_affect20 | district^party + cycle^party, data = prob_anl_dan, subset = ~ party == 200),
+  feols(prob_dw1 ~ nd_both10   | district^party + cycle^party, data = prob_anl_dan, subset = ~ party == 200)
+)
+
+# Set 2: Republicans (party == 100)
+m_rep_prob <- list(
+  feols(prob_dw1 ~ nd_death10  | district^party + cycle^party, data = prob_anl_dan, subset = ~ party == 100),
+  feols(prob_dw1 ~ nd_affect20 | district^party + cycle^party, data = prob_anl_dan, subset = ~ party == 100),
+  feols(prob_dw1 ~ nd_both10   | district^party + cycle^party, data = prob_anl_dan, subset = ~ party == 100)
+)
+
+# Combine into master list for the table
+m_prob_final <- c(m_dem_prob, m_rep_prob)
+
+etable(
+  m_prob_final,
+  tex = TRUE,
+  style.tex = style.tex(main = "base", tabular = "normal"),
+  postprocess.tex = function(x) {
+    # Stripping the table environment as per your saved style
+    x = x[!grepl("\\\\begin\\{table\\}|\\\\end\\{table\\}|\\\\caption", x)]
+    x
+  },
+  se = "cluster", 
+  cluster = ~ district, 
+  drop = "Intercept",
+  dict = c(
+    nd_death10  = "Deaths", 
+    nd_affect20 = "Affected", 
+    nd_both10   = "Both",
+    prob_dw1    = "Prob. Extreme"
+  ),
+  # Explicitly labeling the columns by party
+  headers = list("Party" = c("Democrats" = 3, "Republicans" = 3)),
+  fitstat = ~ n + r2,
+  file = "/Users/hyoon/Desktop/dissertation/table_prob_extreme.tex",
+  replace = TRUE
+)
+
+
+
+##################################-----------------------------
+# DID ND --> SHARE
+##################################-----------------------------
+
+library(did2s)
+library(purrr)
+library(dplyr)
+library(broom)
+
+# Define the components of your predictor set
+thresholds <- c(10, 20, 30)
+types <- c("both", "death", "affect")
+outcomes <- c("pct.amt.out", "pct.out")
+
+# Create a grid of all combinations
+model_grid <- expand.grid(type = types, threshold = thresholds, yname = outcomes, stringsAsFactors = FALSE)
+
+# Run the 2-stage DiD for all combinations
+all_results <- model_grid %>%
+  transpose() %>%
+  map_df(~{
+    iv_name <- paste0("nd_", .x$type, .x$threshold)
+    
+    # Run did2s
+    model <- did2s(
+      data = agg,
+      yname = .x$yname,
+      first_stage = ~ 1 | district^party + cycle^party,
+      second_stage = as.formula(paste0("~ i(", iv_name, ", ref=0)")),
+      treatment = iv_name,
+      cluster_var = "district"
+    )
+    
+    # Clean up results for the master list
+    tidy(model) %>%
+      filter(term != "(Intercept)") %>%
+      mutate(
+        type = .x$type,
+        threshold = .x$threshold,
+        outcome = ifelse(.x$yname == "pct.amt.out", "% Out (Amount)", "% Out (Number)")
+      )
+  })
+
+library(ggplot2)
+library(dplyr)
+
+# 1. Prepare and Reorder the Data
+att_10_df <- all_results %>%
+  filter(threshold == 10) %>%
+  mutate(
+    # Clean labels for the plot
+    type_label = case_when(
+      type == "both"   ~ "Deaths + Affected",
+      type == "death"  ~ "Deaths Only",
+      type == "affect" ~ "Affected Only"
+    )
+  )
+
+library(ggplot2)
+library(dplyr)
+
+# 1. Prepare and Reorder the Data
+plot_10_clean <- att_10_df %>%
+  mutate(
+    # Set the order and the simplified labels simultaneously
+    # 'Affected' will be at the bottom, 'Both' at the top
+    type_clean = factor(type, 
+                        levels = c("both", "death", "affect"),
+                        labels = c("Both", "Deaths", "Affected")),
+    # Ensure outcome labels match your panel preferences
+    outcome_label = ifelse(outcome == "% Out (Amount)", "Amount", "Count")
+  )
+
+# 2. Generate the Two-Panel Aesthetic Plot
+ggplot(plot_10_clean, aes(x = estimate, y = type_clean, color = type_clean)) +
+  # Reference line for null hypothesis
+  geom_vline(xintercept = 0, linetype = "dashed", color = "grey50") + 
+  # Points with specific size and dodge
+  geom_point(position = position_dodge(width = 0.7), size = 2.6) + 
+  # Error bars with height = 0 for the clean horizontal look
+  geom_errorbarh(
+    aes(xmin = estimate - 1.96 * std.error, xmax = estimate + 1.96 * std.error),
+    height = 0, 
+    position = position_dodge(width = 0.7)
+  ) + 
+  # Facet by outcome (Amount vs Number)
+  facet_wrap(~ outcome_label, scales = "free_x") +
+  # Apply your specific color palette with simplified labels
+  scale_color_manual(values = c("Deaths" = "#d73027", "Affected" = "#4575b4", "Both" = "#7b3294")) + 
+  labs(
+    x = "Coefficient estimate", 
+    y = NULL,
+    title = ""
+  ) + 
+  theme_minimal(base_size = 13) + 
+  theme(
+    legend.position = "none",        
+    panel.grid.minor = element_blank(),
+    strip.text = element_text(face = "bold", size = 12, color = "black")
+  )
+
+ggsave(
+  filename = "/Users/hyoon/Desktop/dissertation/did_share.png", 
+  plot = last_plot(),       # Use the last plot displayed
+  width = 10,               # Width in inches
+  height = 7,               # Height in inches
+  dpi = 300                 # Set resolution to 300 DPI
+)
+
+##################################-----------------------------
+# 1-DID: NUMBER in/out
+##################################-----------------------------
+
+did_both_n_in <- did2s(
+  data = agg,
+  yname = "n.in",                      # outcome
+  first_stage = ~ 1 | district^party+cycle^party,     # first-stage controls/FE
+  second_stage = ~ i(nd_both10, ref=0),              # treatment variable
+  treatment = "nd_both10",                 # binary treatment indicator
+  cluster_var = "district"                # cluster SEs by district
+) 
+
+did_both_n_out <- did2s(
+  data = agg,
+  yname = "n.out",                      # outcome
+  first_stage = ~ 1 | district^party+cycle^party,     # first-stage controls/FE
+  second_stage = ~ i(nd_both10, ref=0),              # treatment variable
+  treatment = "nd_both10",                 # binary treatment indicator
+  cluster_var = "district"                # cluster SEs by district
+) 
+
+did_death_n_in <- did2s(
+  data = agg,
+  yname = "n.in",                      # outcome
+  first_stage = ~ 1 | district^party+cycle^party,     # first-stage controls/FE
+  second_stage = ~ i(nd_death10, ref=0),              # treatment variable
+  treatment = "nd_death10",                 # binary treatment indicator
+  cluster_var = "district"                # cluster SEs by district
+) 
+
+did_death_n_out <- did2s(
+  data = agg,
+  yname = "n.out",                      # outcome
+  first_stage = ~ 1 | district^party+cycle^party,     # first-stage controls/FE
+  second_stage = ~ i(nd_death10, ref=0),              # treatment variable
+  treatment = "nd_death10",                 # binary treatment indicator
+  cluster_var = "district"                # cluster SEs by district
+) 
+
+did_affect_n_in <- did2s(
+  data = agg,
+  yname = "n.in",                      # outcome
+  first_stage = ~ 1 | district^party+cycle^party,     # first-stage controls/FE
+  second_stage = ~ i(nd_affect10, ref=0),              # treatment variable
+  treatment = "nd_affect10",                 # binary treatment indicator
+  cluster_var = "district"                # cluster SEs by district
+) 
+
+did_affect_n_out <- did2s(
+  data = agg,
+  yname = "n.out",                      # outcome
+  first_stage = ~ 1 | district^party+cycle^party,     # first-stage controls/FE
+  second_stage = ~ i(nd_affect10, ref=0),              # treatment variable
+  treatment = "nd_affect10",                 # binary treatment indicator
+  cluster_var = "district"                # cluster SEs by district
+) 
+
+att_df_n <- bind_rows(
+  tidy_did(did_both_n_in, "N In", "Deaths + Affected"),
+  tidy_did(did_both_n_out, "N Out", "Deaths + Affected"),
+  
+  tidy_did(did_death_n_in, "N In", "Deaths"),
+  tidy_did(did_death_n_out, "N Out", "Deaths"),
+  
+  tidy_did(did_affect_n_in, "N In", "Affected"),
+  tidy_did(did_affect_n_out, "N Out", "Affected")
+)
+
+ggplot(att_df_n, aes(x = estimate, y = outcome, color = outcome)) +
+  geom_point(size = 3) +
+  geom_errorbarh(aes(xmin = estimate - 1.96*std.error,
+                     xmax = estimate + 1.96*std.error), height = 0.2) +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  facet_wrap(~ iv, scales = "free_x") +
+  scale_color_manual(values = c("N In" = "cadetblue",
+                                "N Out" = "violetred")) +
+  labs(x = "ATT estimate", y = "", color = "Outcome") +
   theme_minimal() +
+  theme(legend.position = "bottom",
+        strip.text = element_text(face = "bold"))
+
+##################################-----------------------------
+# 1-DID: AMT in/out
+##################################-----------------------------
+
+did_both_amt_in <- did2s(
+  data = agg,
+  yname = "amt.in",                      # outcome
+  first_stage = ~ 1 | district^party+cycle^party,     # first-stage controls/FE
+  second_stage = ~ i(nd_both10, ref=0),              # treatment variable
+  treatment = "nd_both10",                 # binary treatment indicator
+  cluster_var = "district"                # cluster SEs by district
+) 
+
+did_both_amt_out <- did2s(
+  data = agg,
+  yname = "amt.out",                      # outcome
+  first_stage = ~ 1 | district^party+cycle^party,     # first-stage controls/FE
+  second_stage = ~ i(nd_both10, ref=0),              # treatment variable
+  treatment = "nd_both10",                 # binary treatment indicator
+  cluster_var = "district"                # cluster SEs by district
+) 
+
+did_death_amt_in <- did2s(
+  data = agg,
+  yname = "amt.in",                      # outcome
+  first_stage = ~ 1 | district^party+cycle^party,     # first-stage controls/FE
+  second_stage = ~ i(nd_death10, ref=0),              # treatment variable
+  treatment = "nd_death10",                 # binary treatment indicator
+  cluster_var = "district"                # cluster SEs by district
+) 
+
+did_death_amt_out <- did2s(
+  data = agg,
+  yname = "amt.out",                      # outcome
+  first_stage = ~ 1 | district^party+cycle^party,     # first-stage controls/FE
+  second_stage = ~ i(nd_death10, ref=0),              # treatment variable
+  treatment = "nd_death10",                 # binary treatment indicator
+  cluster_var = "district"                # cluster SEs by district
+) 
+
+did_affect_amt_in <- did2s(
+  data = agg,
+  yname = "amt.in",                      # outcome
+  first_stage = ~ 1 | district^party+cycle^party,     # first-stage controls/FE
+  second_stage = ~ i(nd_affect10, ref=0),              # treatment variable
+  treatment = "nd_affect10",                 # binary treatment indicator
+  cluster_var = "district"                # cluster SEs by district
+) 
+
+did_affect_amt_out <- did2s(
+  data = agg,
+  yname = "amt.out",                      # outcome
+  first_stage = ~ 1 | district^party+cycle^party,     # first-stage controls/FE
+  second_stage = ~ i(nd_affect10, ref=0),              # treatment variable
+  treatment = "nd_affect10",                 # binary treatment indicator
+  cluster_var = "district"                # cluster SEs by district
+) 
+
+att_df_amt <- bind_rows(
+  tidy_did(did_both_amt_in, "Amt In", "Deaths + Affected"),
+  tidy_did(did_both_amt_out, "Amt Out", "Deaths + Affected"),
+  
+  tidy_did(did_death_amt_in, "Amt In", "Deaths"),
+  tidy_did(did_death_amt_out, "Amt Out", "Deaths"),
+  
+  tidy_did(did_affect_amt_in, "Amt In", "Affected"),
+  tidy_did(did_affect_amt_out, "Amt Out", "Affected")
+)
+
+ggplot(att_df_amt, aes(x = estimate, y = outcome, color = outcome)) +
+  geom_point(size = 3) +
+  geom_errorbarh(aes(xmin = estimate - 1.96*std.error,
+                     xmax = estimate + 1.96*std.error), height = 0.2) +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  facet_wrap(~ iv, scales = "free_x") +
+  scale_color_manual(values = c("Amt In" = "cadetblue",
+                                "Amt Out" = "violetred")) +
+  labs(x = "ATT estimate", y = "", color = "Outcome") +
+  theme_minimal() +
+  theme(legend.position = "bottom",
+        strip.text = element_text(face = "bold"))
+
+
+##################################-----------------------------
+# 1-DID: log in/out
+##################################-----------------------------
+
+# master
+
+# Define components
+thresholds <- c(10, 20, 30)
+types <- c("both", "death", "affect")
+# Four outcomes: In/Out for both Number and Amount
+outcomes <- c("ln_n_in", "ln_n_out", "ln_amt_in", "ln_amt_out")
+
+# Create grid
+model_grid <- expand.grid(type = types, threshold = thresholds, yname = outcomes, stringsAsFactors = FALSE)
+
+# Run models
+all_logged_results <- model_grid %>%
+  transpose() %>%
+  map_df(~{
+    iv_name <- paste0("nd_", .x$type, .x$threshold)
+    
+    model <- did2s(
+      data = agg,
+      yname = .x$yname,
+      first_stage = ~ 1 | district^party + cycle^party,
+      second_stage = as.formula(paste0("~ i(", iv_name, ", ref=0)")),
+      treatment = iv_name,
+      cluster_var = "district"
+    )
+    
+    tidy(model) %>%
+      filter(term != "(Intercept)") %>%
+      mutate(
+        type = .x$type,
+        threshold = .x$threshold,
+        yname = .x$yname,
+        # Create grouping labels for the facets
+        panel_group = ifelse(grepl("ln_n", .x$yname), "Log Counts", "Log Amounts"),
+        location = ifelse(grepl("_in", .x$yname), "In-District", "Out-of-District")
+      )
+  })
+
+# Prepare for plotting
+plot_final_df <- all_logged_results %>%
+  mutate(
+    # Reorder Y-axis: Affected (bottom), Deaths, Both (top)
+    type_clean = factor(type, 
+                        levels = c("affect", "death", "both"),
+                        labels = c("Affected", "Deaths", "Both")),
+    # Bold headers for panels
+    panel_group = factor(panel_group, levels = c("Log Amounts", "Log Counts"))
+  )
+
+ggplot(plot_final_df, aes(x = estimate, y = type_clean, color = type_clean, shape = location)) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "grey50") + 
+  # Dodge by location (In vs Out) AND threshold
+  geom_point(position = position_dodge(width = 0.8), size = 2.5) + 
+  geom_errorbarh(
+    aes(xmin = estimate - 1.96 * std.error, xmax = estimate + 1.96 * std.error),
+    height = 0, 
+    linewidth = 0.8,
+    position = position_dodge(width = 0.8)
+  ) + 
+  # Separate panels for Amount and Number
+  facet_grid(threshold ~ panel_group, scales = "free_x") +
+  scale_color_manual(values = c("Deaths" = "#d73027", "Affected" = "#4575b4", "Both" = "#7b3294")) + 
+  labs(
+    x = "Coefficient estimate (ATT)", 
+    y = NULL,
+    title = "Effect of Disasters on Logged Donations",
+    shape = "Location"
+  ) + 
+  theme_minimal(base_size = 14) + 
   theme(
     legend.position = "bottom",
-    strip.text = element_text(face = "bold"),
-    axis.text.y  = element_blank(),
-    axis.ticks.y = element_blank()
-  ) 
+    panel.grid.minor = element_blank(),
+    # Bold face for headers as requested
+    strip.text = element_text(face = "bold", size = 12, color = "black"),
+    axis.text.y = element_text(face = "bold", color = "black"),
+    plot.title = element_text(hjust = 0.5, face = "bold")
+  )
 
-feols(prob_cf ~ nd_both2 | district^party + cycle^party, data=prob_anl_dan)
-feols(prob_dw1 ~ nd_both2 | district^party + cycle^party, data=prob_anl_dan)
-feols(prob_dw2 ~ nd_both2 | district^party + cycle^party, data=prob_anl_dan)
-feols(prob_dd ~ nd_both2 | district^party + cycle^party, data=prob_anl_dan)
+# reporting
 
-feols(prob_cf ~ nd_both2 | district + cycle, data=prob_anl_dan %>% filter(party == 100)) 
-feols(prob_cf ~ nd_both2 | district + cycle, data=prob_anl_dan %>% filter(party == 200)) 
-feols(prob_cf ~ nd_death2 | district + cycle, data=prob_anl_dan %>% filter(party == 100)) 
-feols(prob_cf ~ nd_death2 | district + cycle, data=prob_anl_dan %>% filter(party == 200)) 
-feols(prob_cf ~ nd_affect2 | district + cycle, data=prob_anl_dan %>% filter(party == 100)) 
-feols(prob_cf ~ nd_affect2 | district + cycle, data=prob_anl_dan %>% filter(party == 200)) 
+plot_final_clean <- all_logged_results %>%
+  filter(
+    (type == "affect" & threshold == 30) |
+      (type == "death"  & threshold == 10) |
+      (type == "both"   & threshold == 30)
+  ) %>%
+  mutate(
+    label_short = case_when(
+      type == "affect" ~ "Affected",
+      type == "death"  ~ "Deaths",
+      type == "both"   ~ "Both"
+    ),
+    label_short = factor(label_short, levels = c("Both", "Deaths", "Affected")),
+    # Ensure bold headers for Amount and Number panels
+    panel_group = factor(panel_group, levels = c("Log Amounts", "Log Counts"))
+  )
 
-feols(prob_dw1 ~ nd_both2 | district + cycle, data=prob_anl_dan %>% filter(party == 100)) 
-feols(prob_dw1 ~ nd_both2 | district + cycle, data=prob_anl_dan %>% filter(party == 200)) 
-feols(prob_dw1 ~ nd_death2 | district + cycle, data=prob_anl_dan %>% filter(party == 100)) 
-feols(prob_dw1 ~ nd_death2 | district + cycle, data=prob_anl_dan %>% filter(party == 200)) 
-feols(prob_dw1 ~ nd_affect2 | district + cycle, data=prob_anl_dan %>% filter(party == 100)) 
-feols(prob_dw1 ~ nd_affect2 | district + cycle, data=prob_anl_dan %>% filter(party == 200)) 
+ggplot(plot_final_clean, aes(x = estimate, y = label_short, color = label_short, shape = location)) +
+  # Reference line for the null hypothesis
+  geom_vline(xintercept = 0, linetype = "dashed", color = "grey50") + 
+  # Points and horizontal whiskers with position_dodge for location contrast
+  geom_point(position = position_dodge(width = 0.6), size = 2.6) + 
+  geom_errorbarh(
+    aes(xmin = estimate - 1.96 * std.error, xmax = estimate + 1.96 * std.error),
+    height = 0, 
+    linewidth = 0.7,
+    position = position_dodge(width = 0.6)
+  ) + 
+  # Bold Face Headers for Panels
+  facet_wrap(~ panel_group, scales = "free_x") +
+  # Apply your specific hex color palette
+  scale_color_manual(values = c("Deaths" = "#d73027", 
+                                "Affected" = "#4575b4", 
+                                "Both" = "#7b3294")) + 
+  labs(
+    x = "Coefficient estimate", 
+    y = NULL,
+    title = "",
+    shape = NULL
+  ) + 
+  guides(color = "none") +
+  theme_minimal(base_size = 14) + 
+  theme(
+    legend.position = "bottom",
+    panel.grid.minor = element_blank(),
+    # Bold face for the panel headers (Amount and Number)
+    strip.text = element_text(face = "bold", size = 13, color = "black"),
+    axis.text.y = element_text(color = "black"))
 
-feols(prob_dw2 ~ nd_both2 | district + cycle, data=prob_anl_dan %>% filter(party == 100)) 
-feols(prob_dw2 ~ nd_both2 | district + cycle, data=prob_anl_dan %>% filter(party == 200)) 
-feols(prob_dw2 ~ nd_death2 | district + cycle, data=prob_anl_dan %>% filter(party == 100)) 
-feols(prob_dw2 ~ nd_death2 | district + cycle, data=prob_anl_dan %>% filter(party == 200)) 
-feols(prob_dw2 ~ nd_affect2 | district + cycle, data=prob_anl_dan %>% filter(party == 100)) 
-feols(prob_dw2 ~ nd_affect2 | district + cycle, data=prob_anl_dan %>% filter(party == 200)) 
-
-feols(prob_dd ~ nd_both2 | district + cycle, data=prob_anl_dan %>% filter(party == 100)) 
-feols(prob_dd ~ nd_both2 | district + cycle, data=prob_anl_dan %>% filter(party == 200)) 
-feols(prob_dd ~ nd_death2 | district + cycle, data=prob_anl_dan %>% filter(party == 100)) 
-feols(prob_dd ~ nd_death2 | district + cycle, data=prob_anl_dan %>% filter(party == 200)) 
-feols(prob_dd ~ nd_affect2 | district + cycle, data=prob_anl_dan %>% filter(party == 100)) 
-feols(prob_dd ~ nd_affect2 | district + cycle, data=prob_anl_dan %>% filter(party == 200)) 
+ggsave(
+  filename = "/Users/hyoon/Desktop/dissertation/did_log.png", 
+  plot = last_plot(),       # Use the last plot displayed
+  width = 10,               # Width in inches
+  height = 7,               # Height in inches
+  dpi = 300                 # Set resolution to 300 DPI
+)
 
 
+##################################-----------------------------
+# 2.1-DID: 
+##################################-----------------------------
+
+# Define the 9 predictors [cite: 2026-02-03]
+thresholds <- c(10, 20, 30)
+types <- c("both", "death", "affect")
+
+# Run models for the Ideology outcome
+ideo_results <- expand.grid(type = types, threshold = thresholds, stringsAsFactors = FALSE) %>%
+  transpose() %>%
+  map_df(~{
+    iv_name <- paste0("nd_", .x$type, .x$threshold)
+    
+    model <- did2s(
+      data = winner,
+      yname = "ab.dist.dw1",
+      first_stage = ~ 1 | district + cycle, # Fixed effects for ideology model
+      second_stage = as.formula(paste0("~ i(", iv_name, ", ref=0)")),
+      treatment = iv_name,
+      cluster_var = "district"
+    )
+    
+    tidy(model) %>%
+      filter(term != "(Intercept)") %>%
+      mutate(type = .x$type, threshold = .x$threshold)
+  })
+
+# 1. Filter the master ideology results for the 10% threshold only
+ideo_10_df <- ideo_results %>%
+  filter(threshold == 10) %>%
+  mutate(
+    # Simplify labels and set vertical order
+    label_short = case_when(
+      type == "affect" ~ "Affected",
+      type == "death"  ~ "Deaths",
+      type == "both"   ~ "Both"
+    ),
+    label_short = factor(label_short, levels = c("Both", "Deaths", "Affected"))
+  )
+
+ggplot(ideo_10_df, aes(x = estimate, y = label_short, color = label_short)) +
+  # Reference line at zero
+  geom_vline(xintercept = 0, linetype = "dashed", color = "grey50") + 
+  # Points and horizontal error bars
+  geom_point(size = 2.5) + 
+  geom_errorbarh(
+    aes(xmin = estimate - 1.96 * std.error, xmax = estimate + 1.96 * std.error),
+    height = 0, 
+    linewidth = 0.8
+  ) + 
+  # Apply the chapter-consistent color palette
+  scale_color_manual(values = c("Deaths" = "#d73027", 
+                                "Affected" = "#4575b4", 
+                                "Both" = "#7b3294")) + 
+  labs(
+    x = "", 
+    y = NULL,
+    title = ""
+  ) + 
+  # Remove redundant legends
+  guides(color = "none") + 
+  theme_minimal(base_size = 14) + 
+  theme(
+    panel.grid.minor = element_blank(),
+    # Bold axis labels for clarity
+    axis.text.y = element_text(color = "black")
+  )
+
+ggsave(
+  filename = "/Users/hyoon/Desktop/dissertation/did_ideo.png", 
+  plot = last_plot(),       # Use the last plot displayed
+  width = 10,               # Width in inches
+  height = 7,               # Height in inches
+  dpi = 300                 # Set resolution to 300 DPI
+)
+
+
+##################################-----------------------------
+# 2.2-DID: 
+##################################-----------------------------
+
+# Define components
+thresholds <- c(10, 20, 30)
+types <- c("both", "death", "affect")
+# 100 = Republicans, 200 = Democrats
+parties <- c(100, 200)
+
+# Run full threshold models by party
+party_sens_results <- expand.grid(type = types, threshold = thresholds, party_code = parties, stringsAsFactors = FALSE) %>%
+  transpose() %>%
+  map_df(~{
+    iv_name <- paste0("nd_", .x$type, .x$threshold)
+    
+    party_data <- prob_anl_dan %>% filter(party == .x$party_code)
+    
+    model <- did2s(
+      data = party_data,
+      yname = "prob_dw1",
+      first_stage = ~ 1 | district + cycle, 
+      second_stage = as.formula(paste0("~ i(", iv_name, ", ref=0)")),
+      treatment = iv_name,
+      cluster_var = "district"
+    )
+    
+    tidy(model) %>%
+      filter(term != "(Intercept)") %>%
+      mutate(
+        type = .x$type, 
+        threshold = .x$threshold,
+        # Updated party labels based on your correction
+        party_label = ifelse(.x$party_code == 200, "Democrats", "Republicans")
+      )
+  })
+
+# Filter the results for the 10% threshold only [cite: 2026-02-03]
+party_10_df <- party_sens_results %>%
+  filter(threshold == 10) %>%
+  mutate(
+    label_short = case_when(
+      type == "affect" ~ "Affected",
+      type == "death"  ~ "Deaths",
+      type == "both"   ~ "Both"
+    ),
+    label_short = factor(label_short, levels = c("Both", "Deaths", "Affected")),
+    party_label = factor(party_label, levels = c("Democrats", "Republicans"))
+  )
+
+ggplot(party_10_df, aes(x = estimate, y = label_short, color = label_short)) +
+  # Reference line at zero
+  geom_vline(xintercept = 0, linetype = "dashed", color = "grey50") + 
+  # Points and horizontal error bars
+  geom_point(size = 2.3) + 
+  geom_errorbarh(
+    aes(xmin = estimate - 1.96 * std.error, xmax = estimate + 1.96 * std.error),
+    height = 0, 
+    linewidth = 0.7
+  ) + 
+  # Two panels: Democrats (Left) and Republicans (Right)
+  facet_wrap(~ party_label) +
+  # Chapter-consistent color palette
+  scale_color_manual(values = c("Deaths" = "#d73027", 
+                                "Affected" = "#4575b4", 
+                                "Both" = "#7b3294")) + 
+  labs(
+    x = "", 
+    y = NULL,
+    title = ""
+  ) + 
+  guides(color = "none") + 
+  theme_minimal(base_size = 14) + 
+  theme(
+    panel.grid.minor = element_blank(),
+    strip.text = element_text(face = "bold", size = 13, color = "black"),
+    axis.text.y = element_text( color = "black")
+  )
+
+ggsave(
+  filename = "/Users/hyoon/Desktop/dissertation/did_prob.png", 
+  plot = last_plot(),       # Use the last plot displayed
+  width = 10,               # Width in inches
+  height = 7,               # Height in inches
+  dpi = 300                 # Set resolution to 300 DPI
+)
+
+##################################-----------------------------
+
+
+##################################-----------------------------
+## pretrend
+##################################-----------------------------
+
+# first stage
+df_nt <- agg %>%
+  arrange(district, cycle) %>%
+  group_by(district) %>%
+  mutate(
+    ever_treated = any(nd_both10 == 1),
+    treated_so_far = cummax(nd_both10)
+  ) %>%
+  ungroup() %>%
+  filter(treated_so_far == 0)
+
+df_nt <- df_nt %>%
+  mutate(future_treated = ifelse(ever_treated == 1, 1, 0))
+
+pretrend_est <- feols(
+  pct.amt.out ~ i(cycle, future_treated, ref = 2002) | cycle + district,
+  cluster = ~district,
+  data = df_nt
+)
+
+# coefplot(
+#   pretrend_est,
+#   xlab = "",
+#   ylab = "Estimated Coefficients",
+#   main = "",
+#   ci.level = 0.95)
+
+# 1. Extract the coefficients into a data frame
+plot_df <- tidy(pretrend_est, conf.int = TRUE) %>%
+  # Filter to keep only the cycle coefficients
+  filter(grepl("cycle", term)) %>%
+  mutate(
+    # Extract the year from the term string (e.g., "cycle::2004:future_treated")
+    year = as.numeric(gsub(".*?(\\d{4}).*", "\\1", term))
+  )
+
+# 2. Manual Plot Construction
+ggplot(plot_df, aes(x = year, y = estimate)) +
+  # Reference line at zero
+  geom_hline(yintercept = 0, color = "black", linetype = "solid") +
+  # Error bars and points
+  geom_pointrange(aes(ymin = conf.low, ymax = conf.high), 
+                  size = 0.8, fatten = 4) +
+  # Setting x-axis breaks only for the estimated years
+  scale_x_continuous(breaks = c(2004, 2006, 2008, 2010)) +
+  labs(
+    x = NULL, 
+    y = "Estimated Coefficients",
+    title = ""
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    panel.grid.minor = element_blank(),
+    panel.grid.major.x = element_blank(), # Optional: removes vertical lines for a cleaner look
+    axis.text = element_text(color = "black"),
+    plot.title = element_text(hjust = 0.5)
+  )
+
+ggsave(
+  filename = "/Users/hyoon/Desktop/dissertation/did_pretrend1.png", 
+  plot = last_plot(),       # Use the last plot displayed
+  width = 10,               # Width in inches
+  height = 7,               # Height in inches
+  dpi = 300                 # Set resolution to 300 DPI
+)
+
+
+# second stage- winner
+
+df_nt2 <- winner %>%
+  arrange(district, cycle) %>%
+  group_by(district) %>%
+  mutate(
+    ever_treated = any(nd_both10 == 1),
+    treated_so_far = cummax(nd_both10)
+  ) %>%
+  ungroup() %>%
+  filter(treated_so_far == 0)
+
+df_nt2 <- df_nt2 %>%
+  mutate(future_treated = ifelse(ever_treated == 1, 1, 0))
+
+
+pretrend_est2 <- feols(
+  ab.dist.dw1 ~ i(cycle, future_treated, ref = 2000) | cycle + district, 
+  cluster = ~district,
+  data = df_nt2
+)
+
+# coefplot(
+#   pretrend_est2,
+#   keep = "cycle::",
+#   xlab = "Election cycle",
+#   ylab = "Difference relative to 2000",
+#   main = "Pre-trend check: future-treated vs never-treated districts",
+#   ci.level = 0.95
+# )
+
+plot_data_ideo <- tidy(pretrend_est2, conf.int = TRUE) %>%
+  filter(grepl("cycle", term)) %>%
+  mutate(
+    # Extracting the year from the interaction term string
+    year = as.numeric(gsub(".*?(\\d{4}).*", "\\1", term))
+  )
+
+ggplot(plot_data_ideo, aes(x = year, y = estimate)) +
+  # Reference line at zero
+  geom_hline(yintercept = 0, color = "black", linetype = "solid") +
+  # Error bars and points
+  geom_pointrange(aes(ymin = conf.low, ymax = conf.high), 
+                  size = 0.8, fatten = 4) +
+  # Explicitly label the cycles you estimated
+  scale_x_continuous(breaks = c(2002, 2004, 2006, 2008, 2010)) +
+  labs(
+    x = NULL, 
+    y = "Estimated Coefficients",
+    title = ""
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    panel.grid.minor = element_blank(),
+    panel.grid.major.x = element_blank(), # Optional: removes vertical lines for a cleaner look
+    axis.text = element_text(color = "black"),
+    plot.title = element_text(hjust = 0.5)
+  )
+
+ggsave(
+  filename = "/Users/hyoon/Desktop/dissertation/did_pretrend2.png", 
+  plot = last_plot(),       # Use the last plot displayed
+  width = 10,               # Width in inches
+  height = 7,               # Height in inches
+  dpi = 300                 # Set resolution to 300 DPI
+)
+
+
+# second stage - weights
+
+df_nt3 <- prob_anl_dan %>%
+  arrange(district, cycle) %>%
+  group_by(district) %>%
+  mutate(
+    ever_treated = any(nd_both10 == 1),
+    treated_so_far = cummax(nd_both10)
+  ) %>%
+  ungroup() %>%
+  filter(treated_so_far == 0)
+
+df_nt3 <- df_nt3 %>%
+  mutate(future_treated = ifelse(ever_treated == 1, 1, 0))
+
+pretrend_est3 <- feols(
+  prob_dw1 ~ i(cycle, future_treated, ref = 2002) | district + cycle,
+  cluster = ~district,
+  data = df_nt3
+)
+
+# coefplot(
+#   pretrend_est3,
+#   keep = "",
+#   xlab = "Election cycle",
+#   ylab = "Difference relative to 2002",
+#   main = "Pre-trend check: future-treated vs never-treated districts",
+#   ci.level = 0.95
+# )
+
+plot_data_prob <- tidy(pretrend_est3, conf.int = TRUE) %>%
+  filter(grepl("cycle", term)) %>%
+  mutate(
+    # Extracting the year from the interaction term string
+    year = as.numeric(gsub(".*?(\\d{4}).*", "\\1", term))
+  )
+
+ggplot(plot_data_prob, aes(x = year, y = estimate)) +
+  # Reference line at zero
+  geom_hline(yintercept = 0, color = "black", linetype = "solid") +
+  # Error bars and points
+  geom_pointrange(aes(ymin = conf.low, ymax = conf.high), 
+                  size = 0.8, fatten = 4) +
+  # Explicitly label the cycles you estimated
+  scale_x_continuous(breaks = c(2004, 2006, 2008, 2010)) +
+  labs(
+    x = NULL, 
+    y = "Estimated Coefficients",
+    title = ""
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    panel.grid.minor = element_blank(),
+    panel.grid.major.x = element_blank(), # Optional: removes vertical lines for a cleaner look
+    axis.text = element_text(color = "black"),
+    plot.title = element_text(hjust = 0.5)
+  )
+
+ggsave(
+  filename = "/Users/hyoon/Desktop/dissertation/did_pretrend3.png", 
+  plot = last_plot(),       # Use the last plot displayed
+  width = 10,               # Width in inches
+  height = 7,               # Height in inches
+  dpi = 300                 # Set resolution to 300 DPI
+)
+
+
+
+##---------------------------------------------------------
 
 
 
