@@ -2919,9 +2919,622 @@ ggsave(
   dpi = 300                 # Set resolution to 300 DPI
 )
 
-
-
 ##---------------------------------------------------------
 
 
+##---------------------------------------------------------
+# robustness checks
+##---------------------------------------------------------
 
+prob3 <- prob2 %>% 
+  group_by(year, party, cong) %>% 
+  summarize(
+    num = n(),
+    mean_cf  = mean(recipient_cfscore, na.rm = TRUE),
+    mean_dw1 = mean(dwnom1, na.rm = TRUE),
+    mean_dw2 = mean(dwnom2, na.rm = TRUE),
+    mean_dd  = mean(dwdime, na.rm = TRUE),
+    mean_cf_ab  = mean(abs(recipient_cfscore), na.rm = TRUE),
+    mean_dw1_ab = mean(abs(dwnom1), na.rm = TRUE),
+    mean_dw2_ab = mean(abs(dwnom2), na.rm = TRUE),
+    mean_dd_ab  = mean(abs(dwdime), na.rm = TRUE),
+   ) %>% 
+  arrange(year, cong, party) %>% 
+  ungroup()
+
+prob_anl2 <- left_join(agg, prob3,
+                          by= c("district" = "cong",
+                                "cycle"= "year",
+                                "party"="party")) 
+
+##----------------
+# n of cand
+##----------------
+
+library(did2s)
+library(fixest)
+library(dplyr)
+library(purrr)
+library(broom)
+
+# 1. Define Model Sets
+types <- c("death", "affect", "both")
+
+# 2. Run TWFE Models
+twfe_num_clean <- expand.grid(type = types, stringsAsFactors = FALSE) %>%
+  mutate(predictor = paste0("nd_", type, "10")) %>%
+  rowwise() %>%
+  mutate(
+    model = list(feols(as.formula(paste0("num ~ ", predictor, " | district^party + cycle^party")), 
+                       data = prob_anl2)),
+    tidy = list(broom::tidy(model, conf.int = TRUE)),
+    method = "TWFE"
+  ) %>%
+  unnest(tidy) %>%
+  filter(term == predictor) %>%
+  ungroup()
+
+# 3. Run DiD Models (did2s)
+did_num_clean <- expand.grid(type = types, stringsAsFactors = FALSE) %>%
+  split(seq(nrow(.))) %>%
+  map_df(~{
+    iv_name <- paste0("nd_", .x$type, "10")
+    model <- did2s(
+      data = prob_anl2,
+      yname = "num",
+      first_stage = ~ 1 | district^party + cycle^party,
+      second_stage = as.formula(paste0("~ i(", iv_name, ", ref=0)")),
+      treatment = iv_name,
+      cluster_var = "district"
+    )
+    tidy(model, conf.int = TRUE) %>%
+      filter(term != "(Intercept)") %>%
+      mutate(type = .x$type, method = "DiD")
+  })
+
+# 4. Harmonize and Combine
+plot_num_robust <- bind_rows(
+  twfe_num_clean %>% select(estimate, conf.low, conf.high, type, method),
+  did_num_clean %>% select(estimate, conf.low, conf.high, type, method)
+) %>%
+  mutate(
+    clean_type = factor(type, levels = rev(c("affect", "death", "both")), 
+                        labels = rev(c("Affected", "Deaths", "Both"))),
+    method = factor(method, levels = c("TWFE", "DiD"))
+  )
+
+# 5. Generate Visualization
+ggplot(plot_num_robust, aes(x = estimate, y = clean_type, color = method, shape = method)) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "gray70") +
+  
+  # Dodged pointranges for estimator comparison
+  geom_pointrange(aes(xmin = conf.low, xmax = conf.high), 
+                  position = position_dodge(width = 0.5),
+                  size = 0.8, fatten = 4) +
+  
+  # Using established estimator colors/shapes
+  scale_color_manual(values = c("TWFE" = "#293352", "DiD" = "#cb6a33")) +
+  scale_shape_manual(values = c("TWFE" = 16, "DiD" = 17)) +
+  
+  labs(
+    x = "Coefficient Estimate",
+    y = NULL,
+    color = "Estimator",
+    shape = "Estimator",
+    # title = "Mechanism Check: Number of Candidates (`num`) ",
+    # subtitle = "Comparing TWFE and DiD results (Null results support the Resource Vacuum theory)"
+  ) +
+  
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = "bottom",
+    axis.text.y = element_text(face = "bold", color = "black"),
+    panel.grid.minor = element_blank(),
+    panel.grid.major.y = element_line(color = "gray95"),
+    panel.spacing = unit(2, "lines")
+  )
+
+# 6. Save
+
+ggsave(
+  filename = "/Users/hyoon/Desktop/dissertation/exc_num.png", 
+  width = 10, height = 7, dpi = 300
+)
+
+
+#################################################################
+# table
+#################################################################
+
+# 1. Run TWFE Models [cite: 2026-02-03]
+m_num_twfe <- list(
+  feols(num ~ nd_affect10 | district^party + cycle^party, data = prob_anl2),
+  feols(num ~ nd_death10  | district^party + cycle^party, data = prob_anl2),
+  feols(num ~ nd_both10   | district^party + cycle^party, data = prob_anl2)
+)
+
+# 2. Run DiD Models (did2s) [cite: 2026-02-03]
+m_num_did <- list(
+  did2s(data = prob_anl2, yname = "num", first_stage = ~ 1 | district^party + cycle^party, 
+        second_stage = ~ i(nd_affect10, ref=0), treatment = "nd_affect10", cluster_var = "district"),
+  did2s(data = prob_anl2, yname = "num", first_stage = ~ 1 | district^party + cycle^party, 
+        second_stage = ~ i(nd_death10, ref=0),  treatment = "nd_death10",  cluster_var = "district"),
+  did2s(data = prob_anl2, yname = "num", first_stage = ~ 1 | district^party + cycle^party, 
+        second_stage = ~ i(nd_both10, ref=0),   treatment = "nd_both10",   cluster_var = "district")
+)
+
+# 3. Combine for Master List [cite: 2026-02-03]
+m_num_final <- c(m_num_twfe, m_num_did)
+
+# 4. Generate LaTeX Table
+etable(
+  m_num_final,
+  tex = TRUE,
+  style.tex = custom_style, 
+  postprocess.tex = custom_postprocess,
+  dict = dict_master, # Ensure nd_affect10 etc. are mapped to "Affected", "Deaths", "Both"
+  
+  # Grouped Headers to distinguish Estimators
+  headers = list("Estimator:" = c("TWFE" = 3, "DiD (2-Stage)" = 3)),
+  
+  # Formatting fixes
+  depvar = FALSE,
+  digits.stats = "r4",
+  powerBelow = -10,
+  fitstat = ~ n, # Dropping R2 as it's a mechanism/placebo check
+  
+  file = "/Users/hyoon/Desktop/dissertation/exec_num.tex",
+  replace = TRUE
+)
+
+
+##----------------
+# ideo shift
+##----------------
+
+
+library(did2s)
+library(fixest)
+library(dplyr)
+library(ggplot2)
+library(purrr)
+library(broom)
+library(stringr)
+
+# 1. Prepare TWFE Data
+types <- c("death", "affect", "both")
+parties <- c(100, 200)
+
+twfe_pool_clean <- expand.grid(
+  type = types, 
+  party_code = parties, 
+  stringsAsFactors = FALSE
+) %>%
+  mutate(predictor = paste0("nd_", type, "10")) %>%
+  rowwise() %>%
+  mutate(
+    model = list(feols(as.formula(paste0("mean_dd ~ ", predictor, " | district + cycle")), 
+                       data = prob_anl2 %>% filter(party == party_code))),
+    tidy = list(broom::tidy(model, conf.int = TRUE)),
+    method = "TWFE"
+  ) %>%
+  unnest(tidy) %>%
+  filter(term == predictor) %>%
+  ungroup() %>%
+  mutate(
+    clean_type = factor(type, levels = rev(c("affect", "death", "both")), 
+                        labels = rev(c("Affected", "Deaths", "Both"))),
+    party_label = ifelse(party_code == 100, "Democrat", "Republican")
+  ) %>%
+  select(estimate, conf.low, conf.high, clean_type, party_label, method)
+
+# 2. Prepare DiD Data
+did_pool_clean <- expand.grid(
+  type = types, 
+  party_code = parties, 
+  stringsAsFactors = FALSE
+) %>%
+  split(seq(nrow(.))) %>%
+  map_df(~{
+    iv_name <- paste0("nd_", .x$type, "10")
+    model <- did2s(
+      data = prob_anl2 %>% filter(party == .x$party_code),
+      yname = "mean_dd",
+      first_stage = ~ 1 | district + cycle,
+      second_stage = as.formula(paste0("~ i(", iv_name, ", ref=0)")),
+      treatment = iv_name,
+      cluster_var = "district"
+    )
+    tidy(model, conf.int = TRUE) %>%
+      filter(term != "(Intercept)") %>%
+      mutate(
+        type = .x$type,
+        party_label = ifelse(.x$party_code == 100, "Democrat", "Republican"),
+        method = "DiD"
+      )
+  }) %>%
+  mutate(
+    clean_type = factor(type, levels = rev(c("affect", "death", "both")), 
+                        labels = rev(c("Affected", "Deaths", "Both")))
+  ) %>%
+  select(estimate, conf.low, conf.high, clean_type, party_label, method)
+
+# 3. Merge and Plot
+plot_pool_robust <- bind_rows(twfe_pool_clean, did_pool_clean) %>%
+  mutate(
+    party_label = factor(party_label, levels = c("Democrat", "Republican")),
+    method = factor(method, levels = c("TWFE", "DiD"))
+  )
+
+ggplot(plot_pool_robust, aes(x = estimate, y = clean_type, color = method, shape = method)) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "gray70") +
+  
+  # Dodged pointranges for estimator comparison
+  geom_pointrange(aes(xmin = conf.low, xmax = conf.high), 
+                  position = position_dodge(width = 0.5),
+                  size = 0.8, fatten = 4) +
+  
+  facet_wrap(~ party_label, scales = "free_x") +
+  
+  # Consistent estimator colors/shapes
+  scale_color_manual(values = c("TWFE" = "#293352", "DiD" = "#cb6a33")) +
+  scale_shape_manual(values = c("TWFE" = 16, "DiD" = 17)) +
+  
+  labs(
+    x = "Coefficient Estimate",
+    y = NULL,
+    color = "Estimator",
+    shape = "Estimator",
+    # title = "Mechanism Check: Pool Ideology ($mean\\_dd$)",
+    # subtitle = "Comparing TWFE and DiD results (Null results support the Resource Vacuum theory)"
+  ) +
+  
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = "bottom",
+    strip.text = element_text(face = "bold", size = 13),
+    axis.text.y = element_text(face = "bold", color = "black"),
+    panel.grid.minor = element_blank(),
+    panel.grid.major.y = element_line(color = "gray95"),
+    panel.spacing = unit(2, "lines")
+  )
+
+# 4. Save
+ggsave(
+  filename = "/Users/hyoon/Desktop/dissertation/exc_ideoshift.png", 
+  width = 10, height = 7, dpi = 300
+)
+
+
+#################################################################
+# table
+#################################################################
+
+# 1. Democrat Models (Party 100) [cite: 2026-02-03]
+m_pool_dem <- list(
+  # TWFE
+  feols(mean_dd ~ nd_affect10 | district + cycle, data = prob_anl2 %>% filter(party == 100)),
+  feols(mean_dd ~ nd_death10  | district + cycle, data = prob_anl2 %>% filter(party == 100)),
+  feols(mean_dd ~ nd_both10   | district + cycle, data = prob_anl2 %>% filter(party == 100)),
+  # DiD
+  did2s(data = prob_anl2 %>% filter(party == 100), yname = "mean_dd", first_stage = ~ 1 | district + cycle, 
+        second_stage = ~ i(nd_affect10, ref=0), treatment = "nd_affect10", cluster_var = "district"),
+  did2s(data = prob_anl2 %>% filter(party == 100), yname = "mean_dd", first_stage = ~ 1 | district + cycle, 
+        second_stage = ~ i(nd_death10, ref=0),  treatment = "nd_death10",  cluster_var = "district"),
+  did2s(data = prob_anl2 %>% filter(party == 100), yname = "mean_dd", first_stage = ~ 1 | district + cycle, 
+        second_stage = ~ i(nd_both10, ref=0),   treatment = "nd_both10",   cluster_var = "district")
+)
+
+# 2. Republican Models (Party 200) [cite: 2026-02-03]
+m_pool_rep <- list(
+  # TWFE
+  feols(mean_dd ~ nd_affect10 | district + cycle, data = prob_anl2 %>% filter(party == 200)),
+  feols(mean_dd ~ nd_death10  | district + cycle, data = prob_anl2 %>% filter(party == 200)),
+  feols(mean_dd ~ nd_both10   | district + cycle, data = prob_anl2 %>% filter(party == 200)),
+  # DiD
+  did2s(data = prob_anl2 %>% filter(party == 200), yname = "mean_dd", first_stage = ~ 1 | district + cycle, 
+        second_stage = ~ i(nd_affect10, ref=0), treatment = "nd_affect10", cluster_var = "district"),
+  did2s(data = prob_anl2 %>% filter(party == 200), yname = "mean_dd", first_stage = ~ 1 | district + cycle, 
+        second_stage = ~ i(nd_death10, ref=0),  treatment = "nd_death10",  cluster_var = "district"),
+  did2s(data = prob_anl2 %>% filter(party == 200), yname = "mean_dd", first_stage = ~ 1 | district + cycle, 
+        second_stage = ~ i(nd_both10, ref=0),   treatment = "nd_both10",   cluster_var = "district")
+)
+
+# 3. Master List [cite: 2026-02-03]
+m_pool_final <- c(m_pool_dem, m_pool_rep)
+
+# 4. Generate LaTeX Table
+etable(
+  m_pool_final,
+  tex = TRUE,
+  style.tex = custom_style, 
+  postprocess.tex = custom_postprocess,
+  dict = dict_master,
+  
+  # Multi-level headers for Party and Estimator
+  headers = list(
+    "Party:" = c("Democrats" = 6, "Republicans" = 6),
+    "Estimator:" = list("TWFE" = 3, "DiD" = 3, "TWFE" = 3, "DiD" = 3)
+  ),
+  
+  # Standardized formatting
+  depvar = FALSE,
+  digits.stats = "r5", 
+  powerBelow = -10,
+  fitstat = ~ n,
+  
+  file = "/Users/hyoon/Desktop/dissertation/exec_ideoshift.tex",
+  replace = TRUE
+)
+
+##----------------
+# registration check
+##----------------
+
+date <- read_excel("/Users/hyoon/Desktop/dissertation/paper3/2026_Primary_Dates.xlsx") %>%
+  mutate(state = state.abb[match(date$State, state.name)],
+         days = date$`Days Between`) 
+# days = primary - deadline
+# close = primary - disaster 
+# identify obs where filing < disaster < primary
+
+reg <- left_join(agg %>% mutate(state = str_sub(district, 1, 2)),
+                 date %>% select(state, days),
+                 by =c("state" = "state")) %>%
+  mutate(post = ifelse(close > 0 & close <= days, 1, 0))
+
+winner2 <- left_join(winner, reg %>% select(district, cycle, party, post),
+                    by = c("district", "cycle", "party"))
+
+prob_anl_dan2 <- left_join(prob_anl_dan, reg %>% select(district, cycle, party, post),
+                           by = c("district", "cycle", "party"))
+
+# result robust for disasters after registration but before elections?
+# not enough observations (318 post registration disasters) + FEs not much variation left
+
+# winner ideo
+# by party reduces N too much -> pretty noisy
+
+feols(dwdime ~ nd_affect10 | district + cycle, winner2 %>% filter(post == 1 & party == 100))
+feols(dwdime ~ nd_death10 | district + cycle, winner2 %>% filter(post == 1 & party == 100))
+feols(dwdime ~ nd_both10 | district + cycle, winner2 %>% filter(post == 1 & party == 100))
+
+# winning prob
+
+feols(prob_dd ~ nd_affect10 | district^party + cycle^party, prob_anl_dan2 %>% filter(post == 1))
+feols(prob_dd ~ nd_death10 | district^party + cycle^party, prob_anl_dan2 %>% filter(post == 1))
+feols(prob_dd ~ nd_both10 | district^party + cycle^party, prob_anl_dan2 %>% filter(post == 1))
+
+
+
+##----------------
+# pool of out donors
+##----------------
+
+# cont has contributor data
+
+out <- join %>%
+  filter(out == 1 & party %in% c("100", "200")) %>%
+  group_by(district, cycle, party) %>%
+  summarize(
+    mean_out_cf = mean(contributor_cfscore, na.rm = TRUE),
+    weighted_out_cf = sum(amount * contributor_cfscore) / sum(amount),
+    .groups = "drop"
+  ) %>%
+  left_join(., agg %>% select(district, cycle, party, 
+                              nd_affect10, nd_death10, nd_both10,
+                              nd_affect20, nd_death20, nd_both20,
+                              nd_affect30, nd_death30, nd_both30,),
+            by = c("district", "cycle", "party")) %>%
+  mutate(across(starts_with("nd_"), ~ as.integer(. > 0)))
+
+# ideo stability
+
+feols(mean_out_cf ~ nd_affect10 | district^party + cycle^party, data = out)
+feols(mean_out_cf ~ nd_death10 | district^party + cycle^party, data = out)
+feols(mean_out_cf ~ nd_both10 | district^party + cycle^party, data = out)
+
+feols(weighted_out_cf ~ nd_affect10 | district^party + cycle^party, data = out)
+feols(weighted_out_cf ~ nd_death10 | district^party + cycle^party, data = out)
+feols(weighted_out_cf ~ nd_both10 | district^party + cycle^party, data = out)
+
+# Mean Outcome
+
+library(dplyr)
+library(purrr)
+library(broom)
+library(fixest)
+library(ggplot2)
+
+# Define parameters
+thresholds <- c("10", "20", "30")
+types      <- c("affect", "death", "both")
+parties    <- c(100, 200)
+
+# Create grid and run TWFE specifications for mean_out_cf
+mean_out_results <- expand.grid(
+  type = types,
+  threshold = thresholds,
+  party_code = parties,
+  stringsAsFactors = FALSE
+) %>%
+  split(seq(nrow(.))) %>%
+  map_df(~{
+    # Construct the treatment variable name dynamically
+    iv_name <- paste0("nd_", .x$type, .x$threshold)
+    
+    # Run the TWFE model with mean_out_cf as the dependent variable
+    model <- feols(
+      as.formula(paste0("mean_out_cf ~ ", iv_name, " | district + cycle")),
+      data = out %>% filter(party == .x$party_code)
+    )
+    
+    # Extract tidy results
+    tidy(model, conf.int = TRUE) %>%
+      filter(term == iv_name) %>%
+      mutate(
+        type = .x$type,
+        threshold = .x$threshold,
+        party_code = .x$party_code
+      )
+  })
+
+plot_mean_out <- mean_out_results %>%
+  mutate(
+    # Disaster Category for Y-axis
+    clean_type = case_when(
+      type == "affect" ~ "Affected",
+      type == "death"  ~ "Deaths",
+      type == "both"   ~ "Both"
+    ),
+    clean_type = factor(clean_type, levels = rev(c("Affected", "Deaths", "Both"))),
+    
+    # Threshold order (10 on top when dodged)
+    threshold_fac = factor(threshold, levels = c("30", "20", "10")),
+    
+    # Party labels
+    party_label = ifelse(party_code == 100, "Democrat", "Republican"),
+    party_label = factor(party_label, levels = c("Democrat", "Republican"))
+  )
+
+ggplot(plot_mean_out, aes(x = estimate, y = clean_type, color = threshold_fac)) +
+  # Reference line at zero
+  geom_vline(xintercept = 0, linetype = "dashed", color = "gray70") +
+  
+  # Pointrange with dodging for thresholds
+  geom_pointrange(aes(xmin = conf.low, xmax = conf.high), 
+                  position = position_dodge(width = 0.7),
+                  size = 0.6, fatten = 3.5) +
+  
+  # Facet by Party
+  facet_wrap(~ party_label, scales = "free_x") +
+  
+  # Professional Threshold Colors 
+  scale_color_manual(
+    values = c("10" = "#53a483", "20" = "#cb6a33", "30" = "#7570b3"),
+    breaks = c("10", "20", "30"),
+    name = "Threshold (%)"
+  ) +
+  
+  labs(
+    x = "Coefficient Estimate",
+    y = NULL
+    # title = "Out-of-District Donor Ideology ($mean\\_out\\_cf$)",
+    # subtitle = "TWFE Estimates by Party (Testing for Compositional Shifts)"
+  ) +
+  
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = "bottom",
+    strip.text = element_text(face = "bold", size = 13),
+    axis.text.y = element_text(face = "bold", color = "black"),
+    panel.grid.minor = element_blank(),
+    panel.grid.major.y = element_line(color = "gray95"),
+    panel.spacing = unit(2, "lines")
+  )
+
+
+## Weighted Outcome
+
+library(dplyr)
+library(purrr)
+library(broom)
+library(fixest)
+library(ggplot2)
+
+# Define parameters
+thresholds <- c("10", "20", "30")
+types      <- c("affect", "death", "both")
+parties    <- c(100, 200)
+
+# Create grid and run TWFE specifications
+out_ideo_results <- expand.grid(
+  type = types,
+  threshold = thresholds,
+  party_code = parties,
+  stringsAsFactors = FALSE
+) %>%
+  split(seq(nrow(.))) %>%
+  map_df(~{
+    # Construct the treatment variable name dynamically
+    iv_name <- paste0("nd_", .x$type, .x$threshold)
+    
+    # Run the TWFE model
+    model <- feols(
+      as.formula(paste0("weighted_out_cf ~ ", iv_name, " | district + cycle")),
+      data = out %>% filter(party == .x$party_code)
+    )
+    
+    # Extract tidy results
+    tidy(model, conf.int = TRUE) %>%
+      filter(term == iv_name) %>%
+      mutate(
+        type = .x$type,
+        threshold = .x$threshold,
+        party_code = .x$party_code
+      )
+  })
+
+plot_out_ideo <- out_ideo_results %>%
+  mutate(
+    # Disaster Category for Y-axis
+    clean_type = case_when(
+      type == "affect" ~ "Affected",
+      type == "death"  ~ "Deaths",
+      type == "both"   ~ "Both"
+    ),
+    clean_type = factor(clean_type, levels = rev(c("Affected", "Deaths", "Both"))),
+    
+    # Threshold order (10 on top when dodged)
+    threshold_fac = factor(threshold, levels = c("30", "20", "10")),
+    
+    # Party labels
+    party_label = ifelse(party_code == 100, "Democrat", "Republican"),
+    party_label = factor(party_label, levels = c("Democrat", "Republican"))
+  )
+
+ggplot(plot_out_ideo, aes(x = estimate, y = clean_type, color = threshold_fac)) +
+  # Reference line at zero
+  geom_vline(xintercept = 0, linetype = "dashed", color = "gray70") +
+  
+  # Pointrange with dodging for thresholds
+  geom_pointrange(aes(xmin = conf.low, xmax = conf.high), 
+                  position = position_dodge(width = 0.7),
+                  size = 0.6, fatten = 3.5) +
+  
+  # Facet by Party
+  facet_wrap(~ party_label, scales = "free_x") +
+  
+  # Professional Threshold Colors 
+  scale_color_manual(
+    values = c("10" = "#53a483", "20" = "#cb6a33", "30" = "#7570b3"),
+    breaks = c("10", "20", "30"),
+    name = "Threshold (%)"
+  ) +
+  
+  labs(
+    x = "Coefficient Estimate",
+    y = NULL
+    # title = "Out-of-District Donor Ideology ($weighted\\_out\\_cf$)",
+    # subtitle = "TWFE Estimates by Party (Testing for Compositional Shifts)"
+  ) +
+  
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = "bottom",
+    strip.text = element_text(face = "bold", size = 13),
+    axis.text.y = element_text(face = "bold", color = "black"),
+    panel.grid.minor = element_blank(),
+    panel.grid.major.y = element_line(color = "gray95"),
+    panel.spacing = unit(2, "lines")
+  )
+
+ggsave(
+  filename = "/Users/hyoon/Desktop/dissertation/out_comp.png", 
+  plot = last_plot(),       # Use the last plot displayed
+  width = 10,               # Width in inches
+  height = 7,               # Height in inches
+  dpi = 300                 # Set resolution to 300 DPI
+)
+
+# another file used to create robustness tables > robustness.R
