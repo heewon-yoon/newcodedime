@@ -1629,4 +1629,409 @@ ggsave(
 )
 
 
+## dynamic effect
 
+library(dplyr)
+library(purrr)
+library(broom)
+library(did2s)
+library(ggplot2)
+library(stringr)
+
+########################################
+##### SHARE: Corrected Dynamic Effects 
+########################################
+
+# 1. Configuration
+thresholds <- c(10, 20, 30)
+types <- c("both", "death", "affect")
+outcomes <- c("pct.amt.out", "pct.out")
+event_window <- 5
+
+model_grid <- expand.grid(type = types,
+                          threshold = thresholds,
+                          yname = outcomes,
+                          stringsAsFactors = FALSE)
+
+# 2. Optimized Estimation Function 
+safe_did <- function(agg_sub, yname, iv_name){
+  
+  if(length(unique(agg_sub[[yname]])) <= 1) return(NULL)
+  
+  model <- did2s(
+    data = agg_sub,
+    yname = yname,
+    first_stage = ~ 1 | district^party + cycle^party,
+    # CRITICAL FIX: Add Inf to the reference group to handle never-treated units
+    second_stage = ~ i(event_time, ref = c(-1, Inf)), 
+    treatment = iv_name, 
+    cluster_var = "district"
+  )
+  
+  tidy(model, conf.int = TRUE) %>%
+    filter(term != "(Intercept)") %>%
+    mutate(event_time = as.integer(str_extract(term, "-?[0-9]+")))
+}
+
+# 3. Execution Loop
+all_results <- model_grid %>%
+  transpose() %>%
+  map_df(~{
+    iv_name <- paste0("nd_", .x$type, .x$threshold)
+    
+    # Calculate relative time
+    agg_sub <- agg %>%
+      group_by(district) %>%
+      mutate(
+        disaster_period = if(any(.data[[iv_name]] == 1)) min(cycle[.data[[iv_name]] == 1]) else NA_integer_,
+        # CRITICAL FIX: Assign Inf instead of NA to never-treated units
+        event_time = if_else(is.na(disaster_period), Inf, cycle - disaster_period)
+      ) %>%
+      ungroup() %>%
+      # Keep never-treated (Inf) and those within the event window
+      filter(is.infinite(event_time) | (event_time >= -event_window & event_time <= event_window))
+    
+    # Use tryCatch to print the actual error to the console if a specific model fails
+    res <- tryCatch({
+      safe_did(agg_sub, .x$yname, iv_name)
+    }, error = function(e) {
+      message(paste("Model failed for", iv_name, "-", .x$yname, ":", e$message))
+      return(NULL)
+    })
+    
+    if(!is.null(res)){
+      ref_row <- data.frame(
+        term = "ref", estimate = 0, std.error = 0, 
+        conf.low = 0, conf.high = 0, event_time = -1
+      )
+      
+      bind_rows(res, ref_row) %>%
+        mutate(
+          type = factor(.x$type),
+          threshold = factor(.x$threshold),
+          outcome = factor(ifelse(.x$yname == "pct.amt.out", "% Out (Amount)", "% Out (Number)"))
+        )
+    } else {
+      NULL
+    }
+  })
+
+# Safety Check
+if(nrow(all_results) == 0) {
+  stop("all_results is empty. All models failed. Check the console messages above.")
+}
+
+# 4. Final Plotting
+ggplot(all_results, aes(x = event_time, y = estimate, color = type, group = type)) +
+  geom_hline(yintercept = 0, linetype = "solid", color = "gray60") +
+  geom_vline(xintercept = -0.5, linetype = "dashed", color = "red") + 
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 0.2, alpha = 0.6) +
+  geom_line(alpha = 0.8) +
+  geom_point(size = 2) +
+  facet_grid(outcome ~ threshold, scales = "free_y", labeller = label_both) +
+  labs(x = "Cycles Relative to Disaster Onset",
+       y = "Estimated Dynamic Effect (95% CI)",
+       color = "Type",
+       title = "Dynamic Effects of Disasters on Candidate Nomination",
+       caption = "Note: Omitted reference period is t = -1.") +
+  theme_minimal(base_size = 14) +
+  theme(legend.position = "bottom",
+        panel.grid.minor = element_blank())
+
+
+
+library(dplyr)
+library(purrr)
+library(broom)
+library(did2s)
+library(ggplot2)
+library(stringr)
+
+########################################
+##### SHARE: Event-Study Function with Fully Customizable Labels
+########################################
+
+run_event_study <- function(data, thresholds, types, outcomes, outcome_labels = NULL, type_labels = NULL, event_window = 6) {
+  
+  # 1. Setup Grid based on user inputs
+  model_grid <- expand.grid(type = types,
+                            threshold = thresholds,
+                            yname = outcomes,
+                            stringsAsFactors = FALSE)
+  
+  # 2. Optimized Estimation Function
+  safe_did <- function(agg_sub, yname, iv_name) {
+    if(length(unique(agg_sub[[yname]])) <= 1) return(NULL)
+    
+    model <- did2s(
+      data = agg_sub,
+      yname = yname,
+      first_stage = ~ 1 | district^party + cycle^party,
+      second_stage = ~ i(event_time, ref = c(-2, Inf)), 
+      treatment = iv_name, 
+      cluster_var = "district"
+    )
+    
+    tidy(model, conf.int = TRUE) %>%
+      filter(term != "(Intercept)") %>%
+      mutate(event_time = as.integer(str_extract(term, "-?[0-9]+")))
+  }
+  
+  # 3. Execution Loop
+  all_results <- model_grid %>%
+    transpose() %>%
+    map_df(~{
+      iv_name <- paste0("nd_", .x$type, .x$threshold)
+      
+      # Calculate relative time in YEARS
+      agg_sub <- data %>%
+        group_by(district) %>%
+        mutate(
+          disaster_period = if(any(.data[[iv_name]] == 1)) min(cycle[.data[[iv_name]] == 1]) else NA_integer_,
+          event_time = if_else(is.na(disaster_period), Inf, cycle - disaster_period)
+        ) %>%
+        ungroup() %>%
+        filter(is.infinite(event_time) | (event_time >= -event_window & event_time <= event_window))
+      
+      res <- tryCatch({
+        safe_did(agg_sub, .x$yname, iv_name)
+      }, error = function(e) {
+        message(sprintf("Model failed for %s - %s: %s", iv_name, .x$yname, e$message))
+        return(NULL)
+      })
+      
+      if(!is.null(res)){
+        # Add baseline dot at t = -2
+        ref_row <- data.frame(
+          term = "ref", estimate = 0, std.error = 0, 
+          conf.low = 0, conf.high = 0, event_time = -2
+        )
+        
+        # Determine correct labels and ordering
+        current_type_label <- if(!is.null(type_labels) && .x$type %in% names(type_labels)) type_labels[.x$type] else .x$type
+        ordered_type_levels <- if(!is.null(type_labels)) unname(type_labels[types]) else types
+        
+        current_outcome_label <- if(!is.null(outcome_labels) && .x$yname %in% names(outcome_labels)) outcome_labels[.x$yname] else .x$yname
+        ordered_outcome_levels <- if(!is.null(outcome_labels)) unname(outcome_labels[outcomes]) else outcomes
+        
+        bind_rows(res, ref_row) %>%
+          mutate(
+            type = factor(current_type_label, levels = ordered_type_levels),
+            threshold = factor(.x$threshold),
+            outcome = factor(current_outcome_label, levels = ordered_outcome_levels)
+          )
+      } else {
+        NULL
+      }
+    })
+  
+  if(nrow(all_results) == 0) {
+    message("All models failed. Check inputs or console messages.")
+    return(NULL)
+  }
+  
+  # 4. Smart Faceting Logic
+  if (length(thresholds) > 1) {
+    plot_facet <- facet_grid(outcome ~ threshold, scales = "free_y")
+    plot_legend <- "bottom"
+  } else {
+    plot_facet <- facet_grid(outcome ~ type, scales = "free_y")
+    plot_legend <- "none"
+  }
+  
+  # 5. Final Plotting
+  p <- ggplot(all_results, aes(x = event_time, y = estimate, color = type, group = type)) +
+    geom_hline(yintercept = 0, linetype = "solid", color = "gray60") +
+    geom_vline(xintercept = -1, linetype = "dashed", color = "red") + 
+    geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 0.2, alpha = 0.6) +
+    geom_line(alpha = 0.8) +
+    geom_point(size = 2) +
+    plot_facet +
+    scale_x_continuous(breaks = seq(-20, 20, by = 2)) + 
+    labs(
+      x = "",
+         y = "Estimated Dynamic Effect",
+#         title = sprintf("Dynamic Effects of Disasters (Threshold(s): %s)", paste(thresholds, collapse = ", ")),
+#         caption = "Note: Omitted reference period is t = -2. SEs clustered by district."
+      ) +
+    theme_minimal(base_size = 14) +
+    theme(legend.position = plot_legend,
+          panel.grid.minor = element_blank(),
+          strip.background = element_rect(fill = "gray90", color = NA),
+          strip.text = element_text(face = "bold"))
+  
+  return(list(plot = p, results = all_results))
+}
+
+# share
+run_event_study(data = agg, 
+                thresholds = 10, 
+                types = c("affect", "death", "both"), 
+                outcomes = c("pct.amt.out", "pct.out"),
+                outcome_labels = c("pct.amt.out" = "Amount",
+                                   "pct.out" = "Count"),
+                type_labels = c("affect" = "Affected",
+                                "death" = "Death",
+                                "both" = "Both"),
+                event_window = 4)
+
+ggsave(
+  filename = "/Users/hyoon/Desktop/dissertation/dynamic_share.png", 
+  width = 10, height = 7, dpi = 300
+)
+
+
+# raw in 
+run_event_study(data = agg, 
+                thresholds = 10, 
+                types = c("affect", "death", "both"), 
+                outcomes = c("ln_amt_in", "ln_n_in"),
+                outcome_labels = c("ln_amt_in" = "Amount",
+                                   "ln_n_in" = "Count"),
+                type_labels = c("affect" = "Affected",
+                                "death" = "Death",
+                                "both" = "Both"),
+                event_window = 4)
+
+# raw out
+run_event_study(data = agg, 
+                thresholds = 10, 
+                types = c("affect", "death", "both"), 
+                outcomes = c("ln_amt_out", "ln_n_out"),
+                outcome_labels = c("ln_amt_out" = "Amount",
+                                   "ln_n_out" = "Count"),
+                type_labels = c("affect" = "Affected",
+                                "death" = "Death",
+                                "both" = "Both"),
+                event_window = 4)
+
+# winner
+run_event_study(data = winner, 
+                thresholds = 10, 
+                types = c("affect", "death", "both"), 
+                outcomes = c("dwdime"),
+                outcome_labels = c("dwdime" = "DW-Dime"),
+                type_labels = c("affect" = "Affected",
+                                "death" = "Death",
+                                "both" = "Both"),
+                event_window = 4)
+
+run_event_study(data = winner %>% filter(party == 100), 
+                thresholds = 10, 
+                types = c("affect", "death", "both"), 
+                outcomes = c("dwdime"),
+                outcome_labels = c("dwdime" = "DW-Dime"),
+                type_labels = c("affect" = "Affected",
+                                "death" = "Death",
+                                "both" = "Both"),
+                event_window = 4)
+
+ggsave(
+  filename = "/Users/hyoon/Desktop/dissertation/dynamic_winner_dem.png", 
+  width = 10, height = 7, dpi = 300
+)
+
+
+run_event_study(data = winner %>% filter(party == 200), 
+                thresholds = 10, 
+                types = c("affect", "death", "both"), 
+                outcomes = c("dwdime"),
+                outcome_labels = c("dwdime" = "DW-Dime"),
+                type_labels = c("affect" = "Affected",
+                                "death" = "Death",
+                                "both" = "Both"),
+                event_window = 4)
+
+ggsave(
+  filename = "/Users/hyoon/Desktop/dissertation/dynamic_winner_rep.png", 
+  width = 10, height = 7, dpi = 300
+)
+
+
+# prob
+run_event_study(data = prob_anl_dan, 
+                thresholds = 10, 
+                types = c("affect", "death", "both"), 
+                outcomes = c("prob_dd"),
+                outcome_labels = c("prob_dd" = "Vote-weighted DW-Dime"),
+                type_labels = c("affect" = "Affected",
+                                "death" = "Death",
+                                "both" = "Both"),
+                event_window = 4)
+
+run_event_study(data = prob_anl_dan %>% filter(party == 100), 
+                thresholds = 10, 
+                types = c("affect", "death", "both"), 
+                outcomes = c("prob_dd"),
+                outcome_labels = c("prob_dd" = "Vote-weighted DW-Dime"),
+                type_labels = c("affect" = "Affected",
+                                "death" = "Death",
+                                "both" = "Both"),
+                event_window = 4)
+
+run_event_study(data = prob_anl_dan %>% filter(party == 200), 
+                thresholds = 10, 
+                types = c("affect", "death", "both"), 
+                outcomes = c("prob_dd"),
+                outcome_labels = c("prob_dd" = "Vote-weighted DW-Dime"),
+                type_labels = c("affect" = "Affected",
+                                "death" = "Death",
+                                "both" = "Both"),
+                event_window = 4)
+
+# panels by party
+
+# 1. Define model sets separately for Democrats and Republicans
+res_dem <- run_event_study(
+  data = winner %>% filter(party == 100), 
+  thresholds = 10, 
+  types = c("affect", "death", "both"), 
+  outcomes = c("dwdime"),
+  outcome_labels = c("dwdime" = "DW-Dime"),
+  type_labels = c("affect" = "Affected", "death" = "Death", "both" = "Both"),
+  event_window = 4
+)
+
+res_rep <- run_event_study(
+  data = winner %>% filter(party == 200), 
+  thresholds = 10, 
+  types = c("affect", "death", "both"), 
+  outcomes = c("dwdime"),
+  outcome_labels = c("dwdime" = "DW-Dime"),
+  type_labels = c("affect" = "Affected", "death" = "Death", "both" = "Both"),
+  event_window = 4
+)
+
+# 2. Combine the results into one master dataframe
+df_dem <- res_dem$results %>% mutate(Party = "Democrat")
+df_rep <- res_rep$results %>% mutate(Party = "Republican")
+
+master_results <- bind_rows(df_dem, df_rep) %>%
+  # Make Party a factor to lock in the top/bottom order for the plot panels
+  mutate(Party = factor(Party, levels = c("Democrat", "Republican")))
+
+# 3. Generate the final faceted plot
+ggplot(master_results, aes(x = event_time, y = estimate, color = type, group = type)) +
+  geom_hline(yintercept = 0, linetype = "solid", color = "gray60") +
+  geom_vline(xintercept = -1, linetype = "dashed", color = "red") + 
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 0.2, alpha = 0.6) +
+  geom_line(alpha = 0.8) +
+  geom_point(size = 2) +
+  # Facet by Party (rows) and Type (columns)
+  facet_grid(Party ~ type, scales = "free_y") +
+  scale_x_continuous(breaks = seq(-20, 20, by = 2)) + 
+  labs(x = "",
+       y = "Estimated Dynamic Effect",
+#       title = "Dynamic Effects of Disasters on Winner's Ideology by Party",
+#       caption = "Note: Omitted reference period is t = -2. SEs clustered by district."
+) +
+  theme_minimal(base_size = 14) +
+  theme(legend.position = "none",
+        panel.grid.minor = element_blank(),
+        strip.background = element_rect(fill = "gray90", color = NA),
+        strip.text = element_text(face = "bold"))
+
+ggsave(
+  filename = "/Users/hyoon/Desktop/dissertation/dynamic_winner.png", 
+  width = 10, height = 7, dpi = 300
+)
